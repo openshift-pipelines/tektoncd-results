@@ -68,9 +68,9 @@ type StatusConditionGetter interface {
 // result, one is created automatically.
 // If the Object is already associated with a Record, the existing Record is
 // updated - otherwise a new Record is created.
-func (c *Client) Put(ctx context.Context, o Object, opts ...grpc.CallOption) (*pb.Result, *pb.Record, error) {
+func (c *Client) Put(ctx context.Context, parent string, o Object, opts ...grpc.CallOption) (*pb.Result, *pb.Record, error) {
 	// Make sure parent Result exists (or create one)
-	result, err := c.ensureResult(ctx, o, opts...)
+	result, err := c.ensureResult(ctx, parent, o, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,8 +84,8 @@ func (c *Client) Put(ctx context.Context, o Object, opts ...grpc.CallOption) (*p
 	return result, record, nil
 }
 
-func (c *Client) PutLog(ctx context.Context, o Object, opts ...grpc.CallOption) (*pb.Result, *pb.Record, error) {
-	result, err := c.ensureResult(ctx, o, opts...)
+func (c *Client) PutLog(ctx context.Context, parent string, o Object, opts ...grpc.CallOption) (*pb.Result, *pb.Record, error) {
+	result, err := c.ensureResult(ctx, parent, o, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -98,8 +98,8 @@ func (c *Client) PutLog(ctx context.Context, o Object, opts ...grpc.CallOption) 
 
 // ensureResult gets the Result corresponding to the Object, creates a new
 // one, or updates the existing Result with new Object details if necessary.
-func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOption) (*pb.Result, error) {
-	name := resultName(o)
+func (c *Client) ensureResult(ctx context.Context, parent string, o Object, opts ...grpc.CallOption) (*pb.Result, error) {
+	name := resultName(parent, o)
 	curr, err := c.ResultsClient.GetResult(ctx, &pb.GetResultRequest{Name: name}, opts...)
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, status.Errorf(status.Code(err), "GetResult(%s): %v", name, err)
@@ -125,7 +125,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 	if status.Code(err) == codes.NotFound {
 		// Result doesn't exist yet - create.
 		req := &pb.CreateResultRequest{
-			Parent: parentName(o),
+			Parent: parent,
 			Result: new,
 		}
 		return c.ResultsClient.CreateResult(ctx, req, opts...)
@@ -163,33 +163,33 @@ func getTimestamp(c *apis.Condition) *timestamppb.Timestamp {
 // resultName gets the result name to use for the given object.
 // The name is derived from a known Tekton annotation if available, else
 // the object's name is used.
-func resultName(o metav1.Object) string {
+func resultName(parent string, o metav1.Object) string {
 	// Special case result annotations, since this should already be the
 	// full result identifier.
 	if v, ok := o.GetAnnotations()[annotation.Result]; ok {
 		return v
 	}
 
-	var part string
+	var name string
 	if v, ok := o.GetLabels()["triggers.tekton.dev/triggers-eventid"]; ok {
 		// Don't prefix trigger events. These are 1) not CRD types, 2) are
 		// intended to be unique identifiers already, and 3) should be applied
 		// to all objects created via trigger templates, so there's no need to
 		// prefix these to avoid collision.
-		part = v
+		name = v
 	} else if len(o.GetOwnerReferences()) > 0 {
 		for _, owner := range o.GetOwnerReferences() {
 			if strings.EqualFold(owner.Kind, "pipelinerun") {
-				part = string(owner.UID)
+				name = string(owner.UID)
 				break
 			}
 		}
 	}
 
-	if part == "" {
-		part = defaultName(o)
+	if name == "" {
+		name = string(o.GetUID())
 	}
-	return result.FormatName(o.GetNamespace(), part)
+	return result.FormatName(parent, name)
 }
 
 func recordName(parent string, o Object) string {
@@ -203,13 +203,13 @@ func recordName(parent string, o Object) string {
 // parentName returns the parent's name of the result in question. If the
 // results annotation is set, returns the first segment of the result
 // name. Otherwise, returns the object's namespace.
-func parentName(o metav1.Object) string {
+func parentName(o metav1.Object, parent string) string {
 	if value, found := o.GetAnnotations()[annotation.Result]; found {
 		if parts := strings.Split(value, "/"); len(parts) != 0 {
-			return parts[0]
+			return parts[0] + "/" + parts[1]
 		}
 	}
-	return o.GetNamespace()
+	return parent
 }
 
 func logName(parent string, o Object) string {

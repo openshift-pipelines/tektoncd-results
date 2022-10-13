@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -36,10 +37,10 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/credentials/oauth"
 	corev1 "k8s.io/api/core/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"k8s.io/client-go/transport"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
@@ -121,18 +122,15 @@ func connectToAPIServer(ctx context.Context, apiAddr string, authMode string) (*
 			grpc.WithDefaultCallOptions(grpc.PerRPCCredentials(creds.Google())),
 		)
 	case "token":
-		var ts oauth2.TokenSource
 		if t := *authToken; t != "" {
-			ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: t})
+			opts = append(opts, grpc.WithDefaultCallOptions(grpc.PerRPCCredentials(oauth.TokenSource{TokenSource: oauth2.StaticTokenSource(&oauth2.Token{
+				AccessToken: t,
+			})})))
 		} else {
-			ts = transport.NewCachedFileTokenSource(podTokenPath)
+			return nil, errors.New("token parameter must be provided when auth mode is set to 'token'")
 		}
-		opts = append(opts,
-			grpc.WithDefaultCallOptions(grpc.PerRPCCredentials(oauth.TokenSource{TokenSource: ts})),
-			grpc.WithTransportCredentials(cred),
-		)
 	case "insecure":
-		opts = append(opts, grpc.WithInsecure())
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
 	log.Printf("dialing %s...\n", apiAddr)

@@ -22,9 +22,11 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/jonboulle/clockwork"
+	"github.com/kcp-dev/kcp/pkg/syncer/shared"
 	"github.com/tektoncd/cli/pkg/cli"
 	tknlog "github.com/tektoncd/cli/pkg/log"
 	tknopts "github.com/tektoncd/cli/pkg/options"
+	resultapi "github.com/tektoncd/results/pkg/api/server/v1alpha2/result"
 	"github.com/tektoncd/results/pkg/apis/v1alpha2"
 	"github.com/tektoncd/results/pkg/watcher/convert"
 	logwriter "github.com/tektoncd/results/pkg/watcher/log"
@@ -81,8 +83,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 		log.Infof("Post-GVK Object: %v", o)
 	}
 
+	// Get namespace name from object
+	ns, err := r.cfg.KubeClient.CoreV1().Namespaces().Get(ctx, o.GetNamespace(), metav1.GetOptions{})
+	if err != nil {
+		log.Errorf("error fetching namespace: %v", err)
+		return err
+	}
+
+	// Get KCP namespace locator
+	nl, ok, err := shared.LocatorFromAnnotations(ns.Annotations)
+	if err != nil {
+		log.Errorf("error fetching namespace: %v", err)
+		return err
+	}
+	if !ok {
+		log.Info("skipping resource: object not in KCP namespace")
+		return nil
+	}
+
+	// Format parent as per API specs
+	parent := resultapi.FormatParent(nl.Workspace.String(), nl.Namespace)
+
 	// Update record.
-	result, record, err := r.resultsClient.Put(ctx, o)
+	result, record, err := r.resultsClient.Put(ctx, parent, o)
 	if err != nil {
 		log.Errorf("error updating Record: %v", err)
 		return err
@@ -93,7 +116,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	if !o.GetObjectKind().GroupVersionKind().Empty() && o.GetObjectKind().GroupVersionKind().Kind == "TaskRun" {
 		// Create a log record if the object has/supports logs
 		// For now this is just TaskRuns.
-		logResult, logRecord, err := r.resultsClient.PutLog(ctx, o)
+		logResult, logRecord, err := r.resultsClient.PutLog(ctx, parent, o)
 		if err != nil {
 			log.Errorf("error creating TaskRun log Record: %v", err)
 			return err
