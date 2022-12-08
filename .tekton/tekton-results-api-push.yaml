@@ -3,9 +3,9 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: tekton-results-api-on-pull-request
+  name: tekton-results-api-on-push
   annotations:
-    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-event: "[push]"
     # Use downstream branch since we are using openshift-pipeline/tektoncd-results and not upstream
     pipelinesascode.tekton.dev/on-target-branch: "[downstream]"
     pipelinesascode.tekton.dev/max-keep-runs: "5"
@@ -16,7 +16,7 @@ spec:
     - name: revision
       value: "{{revision}}"
     - name: output-image
-      value: "quay.io/redhat-appstudio/pull-request-builds:tekton-results-api-{{revision}}"
+      value: "quay.io/redhat-appstudio/tekton-results-api:{{revision}}"
     - name: dockerfile
       value: images/api/Dockerfile
     - name: infra-deployment-update-script
