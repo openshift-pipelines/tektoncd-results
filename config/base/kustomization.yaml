@@ -25,6 +25,9 @@ resources:
 
 patches:
   - path: migrator.yaml
+    target:
+      kind: Deployment
+      name: api
 
 configMapGenerator:
   # Create a ConfigMap containing the API configs.
