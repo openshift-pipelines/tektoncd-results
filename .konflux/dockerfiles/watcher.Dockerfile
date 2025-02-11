@@ -31,9 +31,9 @@ LABEL \
       summary="Red Hat OpenShift Pipelines Results Watcher" \
       maintainer="pipelines-extcomm@redhat.com" \
       description="Red Hat OpenShift Pipelines Results Watcher" \
-      io.k8s.display-name="Red Hat OpenShift Pipelines Results Watcher"
+      io.openshift.tags="results,tekton,openshift,watcher"  \
       io.k8s.description="Red Hat OpenShift Pipelines Results Watcher" \
-      io.openshift.tags="pipelines,tekton,openshift"      
+      io.k8s.display-name="Red Hat OpenShift Pipelines Results Watcher"
 
 RUN microdnf install -y shadow-utils && \
     groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
