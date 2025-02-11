@@ -14,7 +14,7 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// This operation is not supported for directory buckets.
+// This operation is not supported by directory buckets.
 //
 // Places an Object Lock configuration on the specified bucket. The rule specified
 // in the Object Lock configuration will be applied by default to every new object
@@ -187,9 +187,6 @@ func (c *Client) addOperationPutObjectLockConfigurationMiddlewares(stack *middle
 	if err = addIsExpressUserAgent(stack); err != nil {
 		return err
 	}
-	if err = addRequestChecksumMetricsTracking(stack, options); err != nil {
-		return err
-	}
 	if err = addOpPutObjectLockConfigurationValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -270,10 +267,9 @@ func getPutObjectLockConfigurationRequestAlgorithmMember(input interface{}) (str
 }
 
 func addPutObjectLockConfigurationInputChecksumMiddlewares(stack *middleware.Stack, options Options) error {
-	return addInputChecksumMiddleware(stack, internalChecksum.InputMiddlewareOptions{
+	return internalChecksum.AddInputMiddleware(stack, internalChecksum.InputMiddlewareOptions{
 		GetAlgorithm:                     getPutObjectLockConfigurationRequestAlgorithmMember,
 		RequireChecksum:                  true,
-		RequestChecksumCalculation:       options.RequestChecksumCalculation,
 		EnableTrailingChecksum:           false,
 		EnableComputeSHA256PayloadHash:   true,
 		EnableDecodedContentLengthHeader: true,

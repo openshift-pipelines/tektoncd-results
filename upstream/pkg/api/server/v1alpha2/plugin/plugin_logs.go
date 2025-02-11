@@ -170,11 +170,7 @@ func getLokiLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) 
 	for k, v := range s.queryParams {
 		parameters.Add(k, v)
 	}
-	query := `{ ` + s.staticLabels + s.config.LOGGING_PLUGIN_NAMESPACE_KEY + `="` + parent + `" }|json uid="` + uidKey + `", message="message" |uid="` + rec.Name + `"| line_format "{{.message}}"`
-	if s.config.LOGGING_PLUGIN_CONTAINER_KEY != "" {
-		query = `{ ` + s.staticLabels + s.config.LOGGING_PLUGIN_NAMESPACE_KEY + `="` + parent + `" }|json uid="` + uidKey + `", container="` + s.config.LOGGING_PLUGIN_CONTAINER_KEY + `", message="message" |uid="` + rec.Name + `"| line_format "container-{{.container}}: message={{.message}}"`
-	}
-	parameters.Add("query", query)
+	parameters.Add("query", `{ `+s.staticLabels+s.config.LOGGING_PLUGIN_NAMESPACE_KEY+`="`+parent+`" }|json uid="`+uidKey+`", message="message" |uid="`+rec.Name+`"| line_format "{{.message}}"`)
 	parameters.Add("end", endTime)
 	parameters.Add("start", startTime)
 	parameters.Add("limit", strconv.FormatUint(uint64(s.queryLimit), 10))
@@ -420,8 +416,7 @@ func (s *LogServer) setLogPlugin() bool {
 		s.getLog = getBlobLogs
 	default:
 		s.IsLogPluginEnabled = false
-		s.logger.Warnf("Plugin Logs API Disable: unsupported type of logs given for plugin, " +
-			"legacy logging system might work")
+		s.logger.Errorf("unsupported type of logs given for plugin")
 	}
 	return s.IsLogPluginEnabled
 }
@@ -431,17 +426,17 @@ func (s *LogServer) LogMux() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// TODO: Create a new log handler
 		ctx := r.Context()
-		md := metadata.MD(r.Header)
+		md := metadata.New(map[string]string{"authorization": r.Header.Get("Authorization")})
 		ctx = metadata.NewIncomingContext(ctx, md)
 		parent := r.PathValue("parent")
-		recID := r.PathValue("recordID")
-		res := r.PathValue("resultID")
-		s.logger.Debugf("recordID: %s resultID: %s name: %s md: %+v", recID, res, parent, r.Header)
 		if err := s.auth.Check(ctx, parent, auth.ResourceLogs, auth.PermissionGet); err != nil {
 			s.logger.Error(err)
 			http.Error(w, "Not Authorized", http.StatusUnauthorized)
 			return
 		}
+		recID := r.PathValue("recordID")
+		res := r.PathValue("resultID")
+		s.logger.Infof("recordID: %s resultID: %s name: %s", recID, res, parent)
 		rec, err := getRecord(s.db, parent, res, recID)
 		if err != nil {
 			s.logger.Error(err)
