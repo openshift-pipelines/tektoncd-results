@@ -39,4 +39,4 @@ RUN microdnf install -y shadow-utils
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
 
-ENTRYPOINT ["/ko-app/results-api"]
+ENTRYPOINT ["/usr/local/bin/results-api"]
