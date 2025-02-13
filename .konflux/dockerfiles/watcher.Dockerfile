@@ -35,8 +35,7 @@ LABEL \
       io.k8s.description="Red Hat OpenShift Pipelines Results Watcher" \
       io.openshift.tags="pipelines,tekton,openshift"
 
-RUN microdnf install -y shadow-utils && \
-    groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
+RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
 
 ENTRYPOINT ["/usr/local/bin/openshift-pipelines-results-watcher"]
