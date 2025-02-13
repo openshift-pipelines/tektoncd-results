@@ -35,7 +35,6 @@ LABEL \
       io.k8s.description="Red Hat OpenShift Pipelines Results retention policy agent" \
       io.openshift.tags="pipelines,tekton,openshift"
 
-RUN microdnf install -y shadow-utils
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
 
