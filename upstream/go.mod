@@ -1,6 +1,7 @@
 module github.com/tektoncd/results
 
-go 1.22.3
+go 1.22.7
+
 toolchain go1.23.5
 
 require (
@@ -38,7 +39,7 @@ require (
 	golang.org/x/net v0.34.0
 	golang.org/x/oauth2 v0.26.0
 	google.golang.org/api v0.220.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20250115164207-1a7da9e5054f
+	google.golang.org/genproto/googleapis/api v0.0.0-20250212204824-5a70512c5d8b
 	google.golang.org/grpc v1.70.0
 	google.golang.org/protobuf v1.36.5
 	gorm.io/driver/mysql v1.5.1
