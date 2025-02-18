@@ -28,7 +28,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/tektoncd-results-main/retention-policy-agent:{{revision}}
+    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/main/results-retention-policy-agent-rhel9:{{revision}}
   - name: dockerfile
     value: .konflux/dockerfiles/retention-policy-agent.Dockerfile
   - name: prefetch-input
