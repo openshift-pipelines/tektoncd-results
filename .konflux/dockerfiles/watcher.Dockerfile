@@ -1,6 +1,5 @@
 ARG GO_BUILDER=brew.registry.redhat.io/rh-osbs/openshift-golang-builder:v1.24
-ARG RUNTIME=registry.access.redhat.com/ubi9/ubi-minimal:latest@sha256:2f06ae0e6d3d9c4f610d32c480338eef474867f435d8d28625f2985e8acde6e8 
-
+ARG RUNTIME=registry.access.redhat.com/ubi9/ubi-minimal:latest@sha256:d1bad2a2790eac1651e57e78159a81b72ddfa7b836936b26cf51e09744bf1c2d
 FROM $GO_BUILDER AS builder
 
 WORKDIR /go/src/github.com/tektoncd/results
