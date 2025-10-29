@@ -1,6 +1,8 @@
 module github.com/tektoncd/results
 
-go 1.23.4
+go 1.24.0
+
+toolchain go1.24.6
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
@@ -46,7 +48,7 @@ require (
 	google.golang.org/api v0.229.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20250414145226-207652e42e2e
 	google.golang.org/grpc v1.72.0
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.10
 	gorm.io/driver/mysql v1.5.1
 	gorm.io/driver/postgres v1.5.2
 	gorm.io/driver/sqlite v1.5.7
@@ -251,7 +253,7 @@ require (
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/genproto v0.0.0-20250324211829-b45e905df463 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250414145226-207652e42e2e // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
