@@ -49,12 +49,12 @@ require (
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.30.1
-	k8s.io/api v0.32.8
-	k8s.io/apimachinery v0.32.8
+	k8s.io/api v0.33.0
+	k8s.io/apimachinery v0.33.0
 	k8s.io/apiserver v0.32.8
 	k8s.io/cli-runtime v0.29.15
-	k8s.io/client-go v0.32.8
-	k8s.io/utils v0.0.0-20241210054802-24370beab758
+	k8s.io/client-go v0.33.0
+	k8s.io/utils v0.0.0-20250502105355-0f33e8f1c979
 	knative.dev/pkg v0.0.0-20250415155312-ed3e2158b883
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -120,14 +120,14 @@ require (
 	github.com/docker/cli v28.2.2+incompatible // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
-	github.com/emicklei/go-restful/v3 v3.12.1 // indirect
+	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.32.4 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.8.0 // indirect
 	github.com/gdamore/encoding v1.0.0 // indirect
 	github.com/gdamore/tcell/v2 v2.6.0 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
@@ -136,7 +136,7 @@ require (
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/go-openapi/jsonpointer v0.21.0 // indirect
+	github.com/go-openapi/jsonpointer v0.21.1 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
@@ -147,14 +147,13 @@ require (
 	github.com/google/gnostic-models v0.6.9 // indirect
 	github.com/google/go-containerregistry v0.20.6 // indirect
 	github.com/google/go-containerregistry/pkg/authn/k8schain v0.0.0-20240108195214-a0658aa1d0cc // indirect
-	github.com/google/go-containerregistry/pkg/authn/kubernetes v0.0.0-20240108195214-a0658aa1d0cc // indirect
-	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/google/go-containerregistry/pkg/authn/kubernetes v0.0.0-20251028202801-aab7c77e9d78 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/wire v0.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/imdario/mergo v0.3.16 // indirect
@@ -216,7 +215,6 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.5.0 // indirect
 	github.com/spiffe/spire-api-sdk v1.12.4 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tektoncd/triggers v0.32.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -254,9 +252,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.32.6 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
-	k8s.io/kube-openapi v0.0.0-20241212222426-2c72e554b1e7 // indirect
+	k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
 	sigs.k8s.io/kustomize/api v0.13.5-0.20230601165947-6ce0bf390ce3 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.14.3-0.20230601165947-6ce0bf390ce3 // indirect
-	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
+	sigs.k8s.io/randfill v1.0.0 // indirect
+	sigs.k8s.io/structured-merge-diff/v4 v4.7.0 // indirect
 )
