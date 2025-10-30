@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tektoncd/pipeline/internal/artifactref"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
@@ -33,6 +34,7 @@ import (
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/internal/computeresources/tasklevel"
 	"github.com/tektoncd/pipeline/pkg/names"
+	tknreconciler "github.com/tektoncd/pipeline/pkg/reconciler"
 	"github.com/tektoncd/pipeline/pkg/spire"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +43,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/strings/slices"
 	"knative.dev/pkg/changeset"
+	"knative.dev/pkg/kmap"
 	"knative.dev/pkg/kmeta"
 )
 
@@ -128,27 +131,6 @@ var (
 
 	// MaxActiveDeadlineSeconds is a maximum permitted value to be used for a task with no timeout
 	MaxActiveDeadlineSeconds = int64(math.MaxInt32)
-
-	// Used in security context of pod init containers
-	allowPrivilegeEscalation = false
-	runAsNonRoot             = true
-
-	// LinuxSecurityContext allow init containers to run in namespaces
-	// with "restricted" pod security admission
-	// See https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
-	LinuxSecurityContext = &corev1.SecurityContext{
-		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
-		},
-		RunAsNonRoot: &runAsNonRoot,
-		SeccompProfile: &corev1.SeccompProfile{
-			Type: corev1.SeccompProfileTypeRuntimeDefault,
-		},
-	}
-	WindowsSecurityContext = &corev1.SecurityContext{
-		RunAsNonRoot: &runAsNonRoot,
-	}
 )
 
 // Builder exposes options to configure Pod construction from TaskSpecs/Runs.
@@ -179,6 +161,8 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 	sidecarLogsResultsEnabled := config.FromContextOrDefaults(ctx).FeatureFlags.ResultExtractionMethod == config.ResultExtractionMethodSidecarLogs
 	enableKeepPodOnCancel := featureFlags.EnableKeepPodOnCancel
 	setSecurityContext := config.FromContextOrDefaults(ctx).FeatureFlags.SetSecurityContext
+	setSecurityContextReadOnlyRootFilesystem := config.FromContextOrDefaults(ctx).FeatureFlags.SetSecurityContextReadOnlyRootFilesystem
+	defaultManagedByLabelValue := config.FromContextOrDefaults(ctx).Defaults.DefaultManagedByLabelValue
 
 	// Add our implicit volumes first, so they can be overridden by the user if they prefer.
 	volumes = append(volumes, implicitVolumes...)
@@ -213,11 +197,18 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 	if taskRun.Spec.ComputeResources != nil {
 		tasklevel.ApplyTaskLevelComputeResources(steps, taskRun.Spec.ComputeResources)
 	}
+
+	securityContextConfig := SecurityContextConfig{
+		SetSecurityContext:        setSecurityContext,
+		SetReadOnlyRootFilesystem: setSecurityContextReadOnlyRootFilesystem,
+	}
+
 	windows := usesWindows(taskRun)
+	pollingInterval := config.FromContextOrDefaults(ctx).Defaults.DefaultSidecarLogPollingInterval
 	if sidecarLogsResultsEnabled {
 		if taskSpec.Results != nil || artifactsPathReferenced(steps) {
 			// create a results sidecar
-			resultsSidecar, err := createResultsSidecar(taskSpec, b.Images.SidecarLogResultsImage, setSecurityContext, windows)
+			resultsSidecar, err := createResultsSidecar(taskSpec, b.Images.SidecarLogResultsImage, securityContextConfig, windows, pollingInterval)
 			if err != nil {
 				return nil, err
 			}
@@ -232,15 +223,15 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 	}
 
 	initContainers = []corev1.Container{
-		entrypointInitContainer(b.Images.EntrypointImage, steps, setSecurityContext, windows),
+		entrypointInitContainer(b.Images.EntrypointImage, steps, securityContextConfig, windows),
 	}
 
 	// Convert any steps with Script to command+args.
 	// If any are found, append an init container to initialize scripts.
 	if alphaAPIEnabled {
-		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, b.Images.ShellImageWin, steps, sidecars, taskRun.Spec.Debug, setSecurityContext)
+		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, b.Images.ShellImageWin, steps, sidecars, taskRun.Spec.Debug, securityContextConfig)
 	} else {
-		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, "", steps, sidecars, nil, setSecurityContext)
+		scriptsInit, stepContainers, sidecarContainers = convertScripts(b.Images.ShellImage, "", steps, sidecars, nil, securityContextConfig)
 	}
 
 	if scriptsInit != nil {
@@ -251,7 +242,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 		volumes = append(volumes, debugScriptsVolume, debugInfoVolume)
 	}
 	// Initialize any workingDirs under /workspace.
-	if workingDirInit := workingDirInit(b.Images.WorkingDirInitImage, stepContainers, setSecurityContext, windows); workingDirInit != nil {
+	if workingDirInit := workingDirInit(b.Images.WorkingDirInitImage, stepContainers, securityContextConfig, windows); workingDirInit != nil {
 		initContainers = append(initContainers, *workingDirInit)
 	}
 
@@ -473,7 +464,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 		priorityClassName = *podTemplate.PriorityClassName
 	}
 
-	podAnnotations := kmeta.CopyMap(taskRun.Annotations)
+	podAnnotations := kmap.ExcludeKeys(kmeta.CopyMap(taskRun.Annotations), tknreconciler.KubernetesManagedByAnnotationKey)
 	podAnnotations[ReleaseAnnotation] = changeset.Get()
 
 	if readyImmediately {
@@ -505,7 +496,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 				*metav1.NewControllerRef(taskRun, groupVersionKind),
 			},
 			Annotations: podAnnotations,
-			Labels:      makeLabels(taskRun),
+			Labels:      makeLabels(taskRun, defaultManagedByLabelValue),
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
@@ -543,7 +534,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1.TaskRun, taskSpec v1.Ta
 }
 
 // makeLabels constructs the labels we will propagate from TaskRuns to Pods.
-func makeLabels(s *v1.TaskRun) map[string]string {
+func makeLabels(s *v1.TaskRun, defaultManagedByLabelValue string) map[string]string {
 	labels := make(map[string]string, len(s.ObjectMeta.Labels)+1)
 	// NB: Set this *before* passing through TaskRun labels. If the TaskRun
 	// has a managed-by label, it should override this default.
@@ -557,6 +548,8 @@ func makeLabels(s *v1.TaskRun) map[string]string {
 	// specifies this label, it should be overridden by this value.
 	labels[pipeline.TaskRunLabelKey] = s.Name
 	labels[pipeline.TaskRunUIDLabelKey] = string(s.UID)
+	// Enforce app.kubernetes.io/managed-by to be the value configured
+	labels[tknreconciler.KubernetesManagedByAnnotationKey] = defaultManagedByLabelValue
 	return labels
 }
 
@@ -594,7 +587,7 @@ func runVolume(i int) corev1.Volume {
 // This should effectively merge multiple command and volumes together.
 // If setSecurityContext is true, the init container will include a security context
 // allowing it to run in namespaces with restriced pod security admission.
-func entrypointInitContainer(image string, steps []v1.Step, setSecurityContext, windows bool) corev1.Container {
+func entrypointInitContainer(image string, steps []v1.Step, securityContext SecurityContextConfig, windows bool) corev1.Container {
 	// Invoke the entrypoint binary in "cp mode" to copy itself
 	// into the correct location for later steps and initialize steps folder
 	command := []string{"/ko-app/entrypoint", "init", "/ko-app/entrypoint", entrypointBinary}
@@ -602,10 +595,6 @@ func entrypointInitContainer(image string, steps []v1.Step, setSecurityContext, 
 		command = append(command, StepName(s.Name, i))
 	}
 	volumeMounts := []corev1.VolumeMount{binMount, internalStepsMount}
-	securityContext := LinuxSecurityContext
-	if windows {
-		securityContext = WindowsSecurityContext
-	}
 
 	// Rewrite steps with entrypoint binary. Append the entrypoint init
 	// container to place the entrypoint binary. Also add timeout flags
@@ -620,8 +609,8 @@ func entrypointInitContainer(image string, steps []v1.Step, setSecurityContext, 
 		Command:      command,
 		VolumeMounts: volumeMounts,
 	}
-	if setSecurityContext {
-		prepareInitContainer.SecurityContext = securityContext
+	if securityContext.SetSecurityContext {
+		prepareInitContainer.SecurityContext = securityContext.GetSecurityContext(windows)
 	}
 	return prepareInitContainer
 }
@@ -631,7 +620,7 @@ func entrypointInitContainer(image string, steps []v1.Step, setSecurityContext, 
 // whether it will run on a windows node, and whether the sidecar should include a security context
 // that will allow it to run in namespaces with "restricted" pod security admission.
 // It will also provide arguments to the binary that allow it to surface the step results.
-func createResultsSidecar(taskSpec v1.TaskSpec, image string, setSecurityContext, windows bool) (v1.Sidecar, error) {
+func createResultsSidecar(taskSpec v1.TaskSpec, image string, securityContext SecurityContextConfig, windows bool, pollingInterval time.Duration) (v1.Sidecar, error) {
 	names := make([]string, 0, len(taskSpec.Results))
 	for _, r := range taskSpec.Results {
 		names = append(names, r.Name)
@@ -673,14 +662,18 @@ func createResultsSidecar(taskSpec v1.TaskSpec, image string, setSecurityContext
 		Name:    pipeline.ReservedResultsSidecarName,
 		Image:   image,
 		Command: command,
+		Env: []corev1.EnvVar{
+			{
+				Name:  "SIDECAR_LOG_POLLING_INTERVAL",
+				Value: pollingInterval.String(),
+			},
+		},
 	}
-	securityContext := LinuxSecurityContext
-	if windows {
-		securityContext = WindowsSecurityContext
+
+	if securityContext.SetSecurityContext {
+		sidecar.SecurityContext = securityContext.GetSecurityContext(windows)
 	}
-	if setSecurityContext {
-		sidecar.SecurityContext = securityContext
-	}
+
 	return sidecar, nil
 }
 
