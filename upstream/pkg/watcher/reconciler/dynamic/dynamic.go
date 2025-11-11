@@ -36,6 +36,7 @@ import (
 	"github.com/tektoncd/results/pkg/watcher/convert"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
+	"github.com/tektoncd/results/pkg/watcher/reconciler/client"
 	"github.com/tektoncd/results/pkg/watcher/results"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"go.uber.org/zap"
@@ -43,7 +44,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/controller"
@@ -61,10 +61,11 @@ type Reconciler struct {
 	KubeClientSet kubernetes.Interface
 
 	resultsClient          *results.Client
-	objectClient           ObjectClient
+	objectClient           client.ObjectClient
 	cfg                    *reconciler.Config
 	IsReadyForDeletionFunc IsReadyForDeletion
 	AfterDeletion          AfterDeletion
+	AfterStorage           AfterStorage
 }
 
 func init() {
@@ -84,8 +85,11 @@ type IsReadyForDeletion func(ctx context.Context, object results.Object) (bool, 
 // AfterDeletion is the function called after object is deleted
 type AfterDeletion func(ctx context.Context, object results.Object) error
 
+// AfterStorage is called after an object has been successfully stored
+type AfterStorage func(ctx context.Context, object results.Object, storageSuccess bool) error
+
 // NewDynamicReconciler creates a new dynamic Reconciler.
-func NewDynamicReconciler(kubeClientSet kubernetes.Interface, rc pb.ResultsClient, lc pb.LogsClient, oc ObjectClient, cfg *reconciler.Config) *Reconciler {
+func NewDynamicReconciler(kubeClientSet kubernetes.Interface, rc pb.ResultsClient, lc pb.LogsClient, oc client.ObjectClient, cfg *reconciler.Config) *Reconciler {
 	return &Reconciler{
 		resultsClient: results.NewClient(rc, lc, cfg),
 		KubeClientSet: kubeClientSet,
@@ -150,6 +154,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 
 	if err != nil {
 		logger.Debugw("Error upserting record to API server", zap.Error(err), timeTakenField)
+
 		if ctxCancel != nil {
 			ctxCancel()
 		}
@@ -225,7 +230,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 
 	recordAnnotation := annotation.Annotation{Name: annotation.Record, Value: rec.GetName()}
 	resultAnnotation := annotation.Annotation{Name: annotation.Result, Value: res.GetName()}
-	if err = r.addResultsAnnotations(logging.WithLogger(ctx, logger), o, recordAnnotation, resultAnnotation); err != nil {
+	if err = r.addResultsAnnotations(ctx, o, recordAnnotation, resultAnnotation); err != nil {
 		// no grpc calls from addResultsAnnotation
 		if ctxCancel != nil {
 			ctxCancel()
@@ -233,8 +238,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 		return err
 	}
 
-	if err = r.deleteUponCompletion(logging.WithLogger(ctx, logger), o); err != nil {
-		// no grpc calls from addResultsAnnotation
+	if err = r.addChildReadyForDeletionAnnotations(ctx, o); err != nil {
+		if ctxCancel != nil {
+			ctxCancel()
+		}
+		return err
+	}
+
+	if err = r.deleteUponCompletion(ctx, o); err != nil {
+		// no grpc calls from deleteUponCompletion
 		if ctxCancel != nil {
 			ctxCancel()
 		}
@@ -243,7 +255,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	if ctxCancel != nil {
 		defer ctxCancel()
 	}
-	return r.addStoredAnnotations(logging.WithLogger(ctx, logger), o)
+	return r.addStoredAnnotations(ctx, o)
 }
 
 // addResultsAnnotations adds Results annotations to the object in question if
@@ -252,15 +264,9 @@ func (r *Reconciler) addResultsAnnotations(ctx context.Context, o results.Object
 	logger := logging.FromContext(ctx)
 	if r.cfg.GetDisableAnnotationUpdate() { //nolint:gocritic
 		logger.Debug("Skipping CRD annotation patch: annotation update is disabled")
-	} else if annotation.IsPatched(o, annotations...) {
-		logger.Debug("Skipping CRD annotation patch: Result annotations are already set")
 	} else {
-		// Update object with Result Annotations.
-		patch, err := annotation.Patch(o, annotations...)
+		err := annotation.Patch(ctx, o, r.objectClient, annotations...)
 		if err != nil {
-			return fmt.Errorf("error adding Result annotations: %w", err)
-		}
-		if err := r.objectClient.Patch(ctx, o.GetName(), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("error patching object: %w", err)
 		}
 	}
@@ -642,7 +648,7 @@ func filterEventList(events *v1.EventList) *v1.EventList {
 	return events
 }
 
-// addStoreAnnotations adds store annotations to the object in question if
+// addStoredAnnotations adds stored annotations to the object in question if
 // annotation patching is enabled.
 func (r *Reconciler) addStoredAnnotations(ctx context.Context, o results.Object) error {
 	logger := logging.FromContext(ctx)
@@ -686,20 +692,56 @@ func (r *Reconciler) addStoredAnnotations(ctx context.Context, o results.Object)
 		return nil
 	}
 
-	if annotation.IsPatched(o, stored) {
-		logger.Debugf("Skipping CRD annotation patch: Result Stored annotations are already set ObjectName: %s", o.GetName())
-		return nil
-	}
-
-	// Update object with Result Stored annotations.
-	patch, err := annotation.Patch(o, stored)
+	err := annotation.Patch(ctx, o, r.objectClient, stored)
 	if err != nil {
-		logger.Errorf("error adding stored annotations: %w ObjectName: %s", err, o.GetName())
-		return fmt.Errorf("error adding stored annotations: %w ObjectName: %s", err, o.GetName())
-	}
-	if err := r.objectClient.Patch(ctx, o.GetName(), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		logger.Errorf("error patching object with stored annotation: %w ObjectName: %s", err, o.GetName())
 		return fmt.Errorf("error patching object with stored annotation: %w ObjectName: %s", err, o.GetName())
 	}
+
+	// Call AfterStorage callback if this is the first time we're marking it as stored after completion
+	// This ensures storage latency metrics are recorded exactly once per object when it transitions
+	// from "not stored after completion" to "stored after completion"
+	if stored.Value == "true" && r.AfterStorage != nil {
+		logger.Debugw("Object stored after completion",
+			zap.String("object", o.GetName()),
+		)
+		if err := r.AfterStorage(ctx, o, true); err != nil {
+			logger.Warnw("Failed to call AfterStorage callback", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+// addChildReadyForDeletionAnnotations set the ChildReadyForDeletion annotation
+// on objects which have an owner and are done.
+func (r *Reconciler) addChildReadyForDeletionAnnotations(ctx context.Context, o results.Object) error {
+	logger := logging.FromContext(ctx)
+	if r.cfg.GetDisableAnnotationUpdate() { //nolint:gocritic
+		logger.Debug("Skipping CRD ChildReadyForDeletion annotation patch: annotation update is disabled")
+		return nil
+	}
+
+	if len(o.GetOwnerReferences()) == 0 {
+		return nil
+	}
+
+	doneObj, ok := o.(interface{ IsDone() bool })
+	if !ok {
+		logger.Errorf("Object %s does not have IsDone() method", o.GetName())
+		return fmt.Errorf("object does not have IsDone() method")
+	}
+	if !doneObj.IsDone() {
+		logger.Debug("Skipping ChildReadyForDeletion annotation patch: object is not done yet")
+		return nil
+	}
+
+	childReadyForDeletion := annotation.Annotation{Name: annotation.ChildReadyForDeletion, Value: "true"}
+	err := annotation.Patch(ctx, o, r.objectClient, childReadyForDeletion)
+	if err != nil {
+		logger.Errorf("error patching object with ChildReadyForDeletion annotation: %w ObjectName: %s", err, o.GetName())
+		return fmt.Errorf("error patching object with ChildReadyForDeletion annotation: %w ObjectName: %s", err, o.GetName())
+	}
+
 	return nil
 }
