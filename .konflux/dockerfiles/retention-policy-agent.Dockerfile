@@ -14,7 +14,7 @@ RUN go build -ldflags="-X 'knative.dev/pkg/changeset.rev=$(cat HEAD)'" -mod=vend
     ./cmd/retention-policy-agent
 
 FROM $RUNTIME
-ARG VERSION=results-1.20
+ARG VERSION=results-1.21
 
 ENV RETENTION_POLICY_AGENT=/usr/local/bin/results-retention-policy-agent \
     KO_APP=/ko-app \
