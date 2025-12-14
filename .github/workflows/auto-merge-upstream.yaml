@@ -14,7 +14,7 @@ jobs:
     steps:
     - name: Checkout the current repo
       uses: actions/checkout@v5
-    - name: list-prs
+    - id: list-prs
       run: |
         echo "Listing PRs"
         gh auth status
