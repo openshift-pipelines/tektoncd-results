@@ -39,7 +39,7 @@ jobs:
       run: |
         # Approve and merge pull-request with no reviews
         
-        pr_list=${{ steps.list-prs.outputs.pr_list }}
+        pr_list="${{ steps.list-prs.outputs.pr_list }}"
         for p in $pr_list; do
           echo "Approving  PR $p"
           gh pr review $p --approve
