@@ -25,7 +25,7 @@ jobs:
         pr_list=$(gh pr list \
           --state open \
           --label upstream  \
-          --json number --jq .[].number  )
+          --json number --jq .[].number | tr '\n' ' '  )
           #        pr_list=$(gh pr list \
           #          --state open \
           #          --label upstream \
