@@ -41,8 +41,6 @@ jobs:
         set -x
         echo '${{ toJson(steps.list-prs.outputs) }}'
         for p in $pr_list; do
-          echo "Approving  PR $p"
-          gh pr review $p --approve
           echo "Adding lgtm label to  PR $p"
           gh pr edit $p --add-label "lgtm" || true
         done
