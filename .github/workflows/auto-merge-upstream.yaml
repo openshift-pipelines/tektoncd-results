@@ -3,6 +3,8 @@ name: auto-merge-upstream-tektoncd/results
 
 on:
   workflow_dispatch: {}
+  schedule:
+    - cron: "0,30 * * * *"
 
 jobs:
   auto-approve-and-merge:
