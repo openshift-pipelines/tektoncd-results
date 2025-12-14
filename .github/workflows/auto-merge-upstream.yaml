@@ -22,10 +22,14 @@ jobs:
 
         pr_list=$(gh pr list \
           --state open \
-          --label upstream \
-          --json number,title,statusCheckRollup \
-          --jq ' .[]| select((.statusCheckRollup // [])| all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED"))| "\(.number)"')    
-        
+          --label upstream  \
+          --json number --jq .[].number  )
+#        pr_list=$(gh pr list \
+#          --state open \
+#          --label upstream \
+#          --json number,title,statusCheckRollup \
+#          --jq ' .[]| select((.statusCheckRollup // [])| all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED"))| "\(.number)"')
+
         echo pr_list="$pr_list"  >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
