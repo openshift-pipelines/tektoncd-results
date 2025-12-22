@@ -209,12 +209,8 @@ func (d *ddl) renameTable(dst, src string) error {
 	return nil
 }
 
-func compileConstraintRegexp(name string) *regexp.Regexp {
-	return regexp.MustCompile("^(?i:CONSTRAINT)\\s+[\"`]?" + regexp.QuoteMeta(name) + "[\"`\\s]")
-}
-
 func (d *ddl) addConstraint(name string, sql string) {
-	reg := compileConstraintRegexp(name)
+	reg := regexp.MustCompile("^CONSTRAINT [\"`]?" + regexp.QuoteMeta(name) + "[\"` ]")
 
 	for i := 0; i < len(d.fields); i++ {
 		if reg.MatchString(d.fields[i]) {
@@ -227,7 +223,7 @@ func (d *ddl) addConstraint(name string, sql string) {
 }
 
 func (d *ddl) removeConstraint(name string) bool {
-	reg := compileConstraintRegexp(name)
+	reg := regexp.MustCompile("^CONSTRAINT [\"`]?" + regexp.QuoteMeta(name) + "[\"` ]")
 
 	for i := 0; i < len(d.fields); i++ {
 		if reg.MatchString(d.fields[i]) {
@@ -239,7 +235,7 @@ func (d *ddl) removeConstraint(name string) bool {
 }
 
 func (d *ddl) hasConstraint(name string) bool {
-	reg := compileConstraintRegexp(name)
+	reg := regexp.MustCompile("^CONSTRAINT [\"`]?" + regexp.QuoteMeta(name) + "[\"` ]")
 
 	for _, f := range d.fields {
 		if reg.MatchString(f) {
