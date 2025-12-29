@@ -10,9 +10,9 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-    - name: Checkout the current repo
+    - id: Checkout the current repo
       uses: actions/checkout@v5
-    - name: list-prs
+    - id: list-prs
       run: |
         echo "Listing PRs"
         gh auth status
@@ -26,29 +26,27 @@ jobs:
           --json number,title,statusCheckRollup \
           --jq ' .[]| select((.statusCheckRollup // [])| all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED"))| "\(.number)"')    
         
-        echo pr_list="$pr_list"  >> "$GITHUB_OUTPUT"
+        echo "pr_list=$pr_list"  >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: approve and add LGTM Labels
+
+    - id: add LGTM Label
       run: |
         # Approve and merge pull-request with no reviews
-        
-        pr_list=${{ steps.list-prs.outputs.pr_list }}
         for p in $pr_list; do
-          echo "Approving  PR $p"
-          gh pr review $p --approve
           echo "Adding lgtm label to  PR $p"
           gh pr edit $p --add-label "lgtm" || true
         done
       env:
+        pr_list: ${{ steps.list-prs.outputs.pr_list }} 
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Merging PRs
+    - id: Merging PRs
       run: |
         # Approve and merge pull-request with no reviews
-        pr_list=${{ steps.list-prs.outputs.pr_list }}
         for p in $pr_list; do
           echo "Merging  PR $p"
           gh pr merge --rebase --delete-branch --auto $p
         done
       env:
+        pr_list: ${{ steps.list-prs.outputs.pr_list }} 
         GH_TOKEN: ${{ secrets.OPENSHIFT_PIPELINES_ROBOT }}
