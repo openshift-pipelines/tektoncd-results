@@ -3,8 +3,6 @@ name: auto-merge-upstream-tektoncd/results
 
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "0,30 * * * *"
 
 jobs:
   auto-approve-and-merge:
@@ -12,7 +10,7 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-    - name: Checkout the current repo
+    - id: Checkout the current repo
       uses: actions/checkout@v5
     - id: list-prs
       run: |
@@ -24,29 +22,25 @@ jobs:
 
         pr_list=$(gh pr list \
           --state open \
-          --label upstream  \
-          --json number --jq .[].number | tr '\n' ' '  )
-          #        pr_list=$(gh pr list \
-          #          --state open \
-          #          --label upstream \
-          #          --json number,title,statusCheckRollup \
-          #          --jq ' .[]| select((.statusCheckRollup // [])| all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED"))| "\(.number)"')
-        set -x
+          --label upstream \
+          --json number,title,statusCheckRollup \
+          --jq ' .[]| select((.statusCheckRollup // [])| all(.conclusion == "SUCCESS" or .conclusion == "SKIPPED"))| "\(.number)"')    
+        
         echo "pr_list=$pr_list"  >> "$GITHUB_OUTPUT"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: approve and add LGTM Labels
+
+    - id: add LGTM Label
       run: |
         # Approve and merge pull-request with no reviews
-        set -x
-        echo '${{ toJson(steps.list-prs.outputs) }}'
         for p in $pr_list; do
           echo "Adding lgtm label to  PR $p"
           gh pr edit $p --add-label "lgtm" || true
         done
       env:
+        pr_list: ${{ steps.list-prs.outputs.pr_list }} 
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Merging PRs
+    - id: Merging PRs
       run: |
         # Approve and merge pull-request with no reviews
         for p in $pr_list; do
@@ -54,5 +48,5 @@ jobs:
           gh pr merge --rebase --delete-branch --auto $p
         done
       env:
-        pr_list: ${{ steps.list-prs.outputs.pr_list }}
+        pr_list: ${{ steps.list-prs.outputs.pr_list }} 
         GH_TOKEN: ${{ secrets.OPENSHIFT_PIPELINES_ROBOT }}
