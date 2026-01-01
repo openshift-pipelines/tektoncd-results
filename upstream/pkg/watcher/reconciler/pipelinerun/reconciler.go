@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/tektoncd/results/pkg/apis/config"
-	"github.com/tektoncd/results/pkg/metrics"
 	"github.com/tektoncd/results/pkg/pipelinerunmetrics"
 
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -28,8 +27,8 @@ import (
 	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
 	pipelinev1listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
+
 	resultsannotation "github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
-	"github.com/tektoncd/results/pkg/watcher/reconciler/client"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/dynamic"
 	"github.com/tektoncd/results/pkg/watcher/results"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
@@ -47,15 +46,14 @@ type Reconciler struct {
 	// kubeClientSet allows us to talk to the k8s for core APIs
 	kubeClientSet kubernetes.Interface
 
-	resultsClient      pb.ResultsClient
-	logsClient         pb.LogsClient
-	pipelineRunLister  pipelinev1listers.PipelineRunLister
-	taskRunLister      pipelinev1listers.TaskRunLister
-	pipelineClient     versioned.Interface
-	cfg                *reconciler.Config
-	metrics            *metrics.Recorder
-	pipelineRunMetrics *pipelinerunmetrics.Recorder
-	configStore        *config.Store
+	resultsClient     pb.ResultsClient
+	logsClient        pb.LogsClient
+	pipelineRunLister pipelinev1listers.PipelineRunLister
+	taskRunLister     pipelinev1listers.TaskRunLister
+	pipelineClient    versioned.Interface
+	cfg               *reconciler.Config
+	metrics           *pipelinerunmetrics.Recorder
+	configStore       *config.Store
 }
 
 // Check that our Reconciler implements pipelinerunreconciler.Interface and pipelinerunreconciler.Finalizer
@@ -68,21 +66,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, pr *pipelinev1.PipelineR
 
 	logger.Infof("Initiating reconciliation for PipelineRun '%s/%s'", pr.Namespace, pr.Name)
 
-	if r.cfg.DisableStoringIncompleteRuns {
-		// Skip if pipelinerun is not done
-		if !pr.IsDone() {
-			logger.Debugf("pipelinerun %s/%s is not done and incomplete runs are disabled, skipping storing", pr.Namespace, pr.Name)
-			return nil
-		}
-
-		// Skip if pipelinerun is already stored
-		if pr.Annotations != nil && pr.Annotations[resultsannotation.Stored] == "true" {
-			logger.Debugf("pipelinerun %s/%s is already stored, skipping", pr.Namespace, pr.Name)
-			return nil
-		}
-	}
-
-	pipelineRunClient := &client.PipelineRunClient{
+	pipelineRunClient := &dynamic.PipelineRunClient{
 		PipelineRunInterface: r.pipelineClient.TektonV1().PipelineRuns(pr.Namespace),
 	}
 
@@ -93,18 +77,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, pr *pipelinev1.PipelineR
 	// properly archived into the API server.
 	dyn.IsReadyForDeletionFunc = r.areAllUnderlyingTaskRunsReadyForDeletion
 	dyn.AfterDeletion = func(ctx context.Context, object results.Object) error {
-		pr, ok := object.(*pipelinev1.PipelineRun)
-		if !ok {
-			return fmt.Errorf("expected PipelineRun, got %T", object)
-		}
-		return r.pipelineRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, pr)
-	}
-	dyn.AfterStorage = func(ctx context.Context, object results.Object, _ bool) error {
-		pr, ok := object.(*pipelinev1.PipelineRun)
-		if !ok {
-			return fmt.Errorf("expected PipelineRun, got %T", object)
-		}
-		return r.metrics.RecordStorageLatency(ctx, pr)
+		pr := object.(*pipelinev1.PipelineRun)
+		return r.metrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, pr)
 	}
 
 	return dyn.Reconcile(logging.WithLogger(ctx, logger), pr)
@@ -159,10 +133,6 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, pr *pipelinev1.PipelineRu
 	// Reconcile the pipelinerun to ensure that it is stored in the database
 	rerr := r.ReconcileKind(ctx, pr)
 
-	return r.finalize(ctx, pr, rerr)
-}
-
-func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, rerr error) knativereconciler.Event {
 	// If logsClient isn't nil, it means we have logging storage enabled
 	// and we can't use finalizers to coordinate deletion.
 	if r.logsClient != nil {
@@ -180,6 +150,7 @@ func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, r
 		return nil
 	}
 
+	var requeueAfter time.Duration
 	var storeDeadline, now time.Time
 
 	// Check if the store deadline is configured
@@ -189,40 +160,31 @@ func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, r
 				pr.Namespace, pr.Name)
 			return nil
 		}
-		now = time.Now().UTC()
-		storeDeadline = pr.Status.CompletionTime.UTC().Add(*r.cfg.StoreDeadline)
+		now = time.Now()
+		storeDeadline = pr.Status.CompletionTime.Add(*r.cfg.StoreDeadline)
+		requeueAfter = storeDeadline.Sub(now)
 		if now.After(storeDeadline) {
-			logging.FromContext(ctx).Debugf("store deadline: %s now: %s, completion time: %s", storeDeadline.String(), now.String(),
-				pr.Status.CompletionTime.UTC().String())
 			logging.FromContext(ctx).Debugf("store deadline has passed for pipelinerun %s/%s", pr.Namespace, pr.Name)
-			_, ok := pr.Annotations[resultsannotation.Stored]
-			if !ok {
-				logging.FromContext(ctx).Errorf("pipelinerun not stored: %s/%s, uid: %s,",
-					pr.Namespace, pr.Name, pr.UID)
-				if err := metrics.CountRunNotStored(ctx, pr.Namespace, "PipelineRun"); err != nil {
-					logging.FromContext(ctx).Errorf("error counting PipelineRun as not stored: %w", err)
-				}
-			}
 			return nil // Proceed with deletion
 		}
 	}
 
 	if pr.Annotations == nil {
-		logging.FromContext(ctx).Debugf("pipelinerun %s/%s annotations are missing, now: %s, storeDeadline: %s",
-			pr.Namespace, pr.Name, now.String(), storeDeadline.String())
-		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+		logging.FromContext(ctx).Debugf("pipelinerun %s/%s annotations are missing, now: %s, storeDeadline: %s, requeueAfter: %s",
+			pr.Namespace, pr.Name, now.String(), storeDeadline.String(), requeueAfter.String())
+		return controller.NewRequeueAfter(requeueAfter)
 	}
 
 	stored, ok := pr.Annotations[resultsannotation.Stored]
 	if !ok {
-		logging.FromContext(ctx).Debugf("stored annotation is missing on pipelinerun %s/%s, now: %s, storeDeadline: %s",
-			pr.Namespace, pr.Name, now.String(), storeDeadline.String())
-		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+		logging.FromContext(ctx).Debugf("stored annotation is missing on pipelinerun %s/%s, now: %s, storeDeadline: %s, requeueAfter: %s",
+			pr.Namespace, pr.Name, now.String(), storeDeadline.String(), requeueAfter.String())
+		return controller.NewRequeueAfter(requeueAfter)
 	}
 	if rerr != nil || stored != "true" {
-		logging.FromContext(ctx).Debugf("stored annotation is not true on pipelinerun %s/%s, now: %s, storeDeadline: %s",
-			pr.Namespace, pr.Name, now.String(), storeDeadline.String())
-		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+		logging.FromContext(ctx).Debugf("stored annotation is not true on pipelinerun %s/%s, now: %s, storeDeadline: %s, requeueAfter: %s",
+			pr.Namespace, pr.Name, now.String(), storeDeadline.String(), requeueAfter.String())
+		return controller.NewRequeueAfter(requeueAfter)
 	}
 
 	return nil
