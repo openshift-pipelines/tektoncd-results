@@ -2,20 +2,23 @@ package taskrun
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/tektoncd/results/pkg/apis/config"
+	"github.com/tektoncd/results/pkg/metrics"
 	"github.com/tektoncd/results/pkg/taskrunmetrics"
-	"github.com/tektoncd/results/pkg/watcher/results"
 
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-
 	"github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/taskrun"
 	v1 "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
+
 	resultsannotation "github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
+	"github.com/tektoncd/results/pkg/watcher/reconciler/client"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/dynamic"
+	"github.com/tektoncd/results/pkg/watcher/results"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"go.uber.org/zap"
 	"k8s.io/client-go/kubernetes"
@@ -32,10 +35,11 @@ type Reconciler struct {
 
 	resultsClient  pb.ResultsClient
 	logsClient     pb.LogsClient
-	lister         v1.TaskRunLister
+	taskRunLister  v1.TaskRunLister
 	pipelineClient versioned.Interface
 	cfg            *reconciler.Config
-	metrics        *taskrunmetrics.Recorder
+	metrics        *metrics.Recorder
+	taskRunMetrics *taskrunmetrics.Recorder
 	configStore    *config.Store
 }
 
@@ -47,14 +51,38 @@ var _ taskrunreconciler.Finalizer = (*Reconciler)(nil)
 func (r *Reconciler) ReconcileKind(ctx context.Context, tr *pipelinev1.TaskRun) knativereconciler.Event {
 	logger := logging.FromContext(ctx).With(zap.String("results.tekton.dev/kind", "TaskRun"))
 
-	taskRunClient := &dynamic.TaskRunClient{
+	if r.cfg.DisableStoringIncompleteRuns {
+		// Skip if taskrun is not done
+		if !tr.IsDone() {
+			logger.Debugf("taskrun %s/%s is not done and incomplete runs are disabled, skipping storing", tr.Namespace, tr.Name)
+			return nil
+		}
+
+		// Skip if taskrun is already stored
+		if tr.Annotations != nil && tr.Annotations[resultsannotation.Stored] == "true" {
+			logger.Debugf("taskrun %s/%s is already stored, skipping", tr.Namespace, tr.Name)
+			return nil
+		}
+	}
+
+	taskRunClient := &client.TaskRunClient{
 		TaskRunInterface: r.pipelineClient.TektonV1().TaskRuns(tr.Namespace),
 	}
 
 	dyn := dynamic.NewDynamicReconciler(r.kubeClientSet, r.resultsClient, r.logsClient, taskRunClient, r.cfg)
-	dyn.AfterDeletion = func(ctx context.Context, o results.Object) error {
-		tr := o.(*pipelinev1.TaskRun)
-		return r.metrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, tr)
+	dyn.AfterDeletion = func(ctx context.Context, object results.Object) error {
+		tr, ok := object.(*pipelinev1.TaskRun)
+		if !ok {
+			return fmt.Errorf("expected TaskRun, got %T", object)
+		}
+		return r.taskRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, tr)
+	}
+	dyn.AfterStorage = func(ctx context.Context, o results.Object, _ bool) error {
+		tr, ok := o.(*pipelinev1.TaskRun)
+		if !ok {
+			return fmt.Errorf("expected TaskRun, got %T", o)
+		}
+		return r.metrics.RecordStorageLatency(ctx, tr)
 	}
 	return dyn.Reconcile(logging.WithLogger(ctx, logger), tr)
 }
@@ -67,6 +95,10 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, tr *pipelinev1.TaskRun) k
 	// Reconcile the taskrun to ensure that it is stored in the database
 	rerr := r.ReconcileKind(ctx, tr)
 
+	return r.finalize(ctx, tr, rerr)
+}
+
+func (r *Reconciler) finalize(ctx context.Context, tr *pipelinev1.TaskRun, rerr error) knativereconciler.Event {
 	// If logsClient isn't nil, it means we have logging storage enabled
 	// and we can't use finalizers to coordinate deletion.
 	if r.logsClient != nil {
@@ -84,7 +116,7 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, tr *pipelinev1.TaskRun) k
 		return nil
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Check if the forwarding buffer is configured and passed
 	if r.cfg.ForwardBuffer != nil {
@@ -93,15 +125,13 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, tr *pipelinev1.TaskRun) k
 				tr.Namespace, tr.Name)
 			return nil
 		}
-		buffer := tr.Status.CompletionTime.Add(*r.cfg.ForwardBuffer)
-		requeueAfter := buffer.Sub(now)
+		buffer := tr.Status.CompletionTime.UTC().Add(*r.cfg.ForwardBuffer)
 		if !now.After(buffer) {
 			logging.FromContext(ctx).Debugf("log forwarding buffer wait for taskrun %s/%s", tr.Namespace, tr.Name)
-			return controller.NewRequeueAfter(requeueAfter)
+			return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 		}
 	}
 
-	var requeueAfter time.Duration
 	var storeDeadline time.Time
 
 	// Check if the store deadline is configured
@@ -111,30 +141,39 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, tr *pipelinev1.TaskRun) k
 				tr.Namespace, tr.Name)
 			return nil
 		}
-		storeDeadline = tr.Status.CompletionTime.Add(*r.cfg.StoreDeadline)
-		requeueAfter = storeDeadline.Sub(now)
+		storeDeadline = tr.Status.CompletionTime.UTC().Add(*r.cfg.StoreDeadline)
 		if now.After(storeDeadline) {
+			logging.FromContext(ctx).Debugf("store deadline: %s now: %s, completion time: %s", storeDeadline.String(), now.String(),
+				tr.Status.CompletionTime.UTC().String())
 			logging.FromContext(ctx).Debugf("store deadline has passed for taskrun %s/%s", tr.Namespace, tr.Name)
+			_, ok := tr.Annotations[resultsannotation.Stored]
+			if !ok {
+				logging.FromContext(ctx).Errorf("taskrun not stored: %s/%s, uid: %s,",
+					tr.Namespace, tr.Name, tr.UID)
+				if err := metrics.CountRunNotStored(ctx, tr.Namespace, "TaskRun"); err != nil {
+					logging.FromContext(ctx).Errorf("error counting TaskRun as not stored: %w", err)
+				}
+			}
 			return nil // Proceed with deletion
 		}
 	}
 
 	if tr.Annotations == nil {
-		logging.FromContext(ctx).Debugf("taskrun %s/%s annotations are missing, now: %s, storeDeadline: %s, requeueAfter: %s",
-			tr.Namespace, tr.Name, now.String(), storeDeadline.String(), requeueAfter.String())
-		return controller.NewRequeueAfter(requeueAfter)
+		logging.FromContext(ctx).Debugf("taskrun %s/%s annotations are missing, now: %s, storeDeadline: %s",
+			tr.Namespace, tr.Name, now.String(), storeDeadline.String())
+		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
 
 	stored, ok := tr.Annotations[resultsannotation.Stored]
 	if !ok {
-		logging.FromContext(ctx).Debugf("stored annotation is missing on taskrun %s/%s, now: %s, storeDeadline: %s, requeueAfter: %s",
-			tr.Namespace, tr.Name, now.String(), storeDeadline.String(), requeueAfter.String())
-		return controller.NewRequeueAfter(requeueAfter)
+		logging.FromContext(ctx).Debugf("stored annotation is missing on taskrun %s/%s, now: %s, storeDeadline: %s",
+			tr.Namespace, tr.Name, now.String(), storeDeadline.String())
+		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
 	if rerr != nil || stored != "true" {
 		logging.FromContext(ctx).Debugf("stored annotation is not true on taskrun %s/%s, now: %s, storeDeadline: %s",
 			tr.Namespace, tr.Name, now.String(), storeDeadline.String())
-		return controller.NewRequeueAfter(requeueAfter)
+		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
 
 	return nil
