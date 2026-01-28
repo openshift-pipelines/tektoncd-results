@@ -26,6 +26,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tektoncd/results/pkg/api/server/features"
+
+	"github.com/tektoncd/results/internal/fieldmask"
+
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/auth/impersonation"
 	"github.com/tektoncd/results/pkg/converter"
 	"golang.org/x/net/http2"
@@ -33,6 +37,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -41,6 +46,9 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	_ "net/http/pprof"
+
+	serverdb "github.com/tektoncd/results/pkg/api/server/db"
+	_ "github.com/tektoncd/results/pkg/api/server/db/errors/postgres"
 
 	"github.com/golang-jwt/jwt/v4"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -66,7 +74,6 @@ import (
 	"google.golang.org/grpc/reflection"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -77,6 +84,12 @@ func main() {
 	// This defer statement will be executed at the end of the application lifecycle, so we do not lose
 	// any data in the event of an unhandled error.
 	defer log.Sync() //nolint:errcheck
+
+	// Load server features
+	f := features.NewFeatureGate()
+	if err := f.Set(serverConfig.FEATURE_GATES); err != nil {
+		log.Errorf("Failed to load feature gates: %v", err)
+	}
 
 	// Load server TLS
 	certFile := path.Join(serverConfig.TLS_PATH, "tls.crt")
@@ -105,17 +118,38 @@ func main() {
 	var err error
 
 	dbURI := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s sslrootcert=%s", serverConfig.DB_HOST, serverConfig.DB_USER, serverConfig.DB_PASSWORD, serverConfig.DB_NAME, serverConfig.DB_PORT, serverConfig.DB_SSLMODE, serverConfig.DB_SSLROOTCERT)
-	gormConfig := &gorm.Config{}
-	if log.Level() != zap.DebugLevel {
-		gormConfig.Logger = gormlogger.Default.LogMode(gormlogger.Silent)
+
+	gormConfig := &gorm.Config{
+		DisableAutomaticPing: true, // manual polling handles readiness with context-aware ping
 	}
+	if err = serverdb.SetLogLevel(serverConfig.SQL_LOG_LEVEL); err != nil {
+		log.Warnf("Failed to configure sql log level: %v", err)
+	}
+
 	// Retry database connection, sometimes the database is not ready to accept connection
-	err = wait.PollImmediate(10*time.Second, 2*time.Minute, func() (bool, error) { //nolint:staticcheck
-		db, err = gorm.Open(postgres.Open(dbURI), gormConfig)
+	ctx := context.Background()
+	err = wait.PollUntilContextTimeout(ctx, 10*time.Second, 2*time.Minute, true, func(pollCtx context.Context) (bool, error) {
+		connection, err := gorm.Open(postgres.Open(dbURI), gormConfig)
 		if err != nil {
 			log.Warnf("Error connecting to database (retrying in 10s): %v", err)
 			return false, nil
 		}
+		sqlConn, err := connection.DB()
+		if err != nil {
+			log.Warnf("Error retrieving database handle (retrying in 10s): %v", err)
+			return false, nil
+		}
+		if err := sqlConn.PingContext(pollCtx); err != nil {
+			if closeErr := sqlConn.Close(); closeErr != nil {
+				log.Debugf("Failed to close db handle after ping failure: %v", closeErr)
+			}
+			if pollCtx.Err() != nil {
+				return false, pollCtx.Err()
+			}
+			log.Warnf("Database ping failed (retrying in 10s): %v", err)
+			return false, nil
+		}
+		db = connection
 		return true, nil
 	})
 	if err != nil {
@@ -159,7 +193,14 @@ func main() {
 
 	// Create the authorization authCheck
 	var authCheck auth.Checker
-	var serverMuxOptions []runtime.ServeMuxOption
+	serverMuxOptions := []runtime.ServeMuxOption{runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
+		MarshalOptions: protojson.MarshalOptions{
+			UseProtoNames: true,
+		},
+		UnmarshalOptions: protojson.UnmarshalOptions{
+			DiscardUnknown: true,
+		},
+	})}
 	if serverConfig.AUTH_DISABLE {
 		log.Warn("Kubernetes RBAC authorization check disabled - all requests will be allowed by the API server")
 		authCheck = &auth.AllowAll{}
@@ -218,6 +259,7 @@ func main() {
 			grpc_zap.UnaryServerInterceptor(grpcLogger, zapOpts...),
 			grpc_auth.UnaryServerInterceptor(determineAuth),
 			prometheus.UnaryServerInterceptor,
+			fieldmask.UnaryServerInterceptor(f.Get(features.PartialResponse)),
 			recovery.UnaryServerInterceptor(recovery.WithRecoveryHandler(recoveryHandler)),
 		),
 		grpc_middleware.WithStreamServerChain(
@@ -291,10 +333,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error dialing gRPC endpoint: %v", err)
 	}
-	serverMuxOptions = append(serverMuxOptions, runtime.WithHealthzEndpoint(healthpb.NewHealthClient(clientConn)))
+	serverMuxOptions = append(serverMuxOptions,
+		runtime.WithHealthzEndpoint(healthpb.NewHealthClient(clientConn)),
+		runtime.WithMetadata(fieldmask.MetadataAnnotator),
+	)
 
 	// Create server for gRPC gateway
-	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var httpMux http.Handler
