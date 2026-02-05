@@ -25,6 +25,7 @@
 | AUTH_DISABLE             | Disable RBAC check for resources                                                                                                  | false (default)                                                                              |
 | AUTH_IMPERSONATE         | Enable RBAC impersonation                                                                                                         | true (default)                                                                               |
 | LOG_LEVEL                | Log level for api server                                                                                                          | info (default)                                                                               |
+| SQL_LOG_LEVEL                | Log level for gorm logger                                                                                                          | warn (default)                                                                               |
 | LOGS_API                 | Enable logs storage service                                                                                                       | false (default)                                                                              |
 | LOGS_TYPE                | Determine Logs storage backend type                                                                                               | File (default)                                                                               |
 | LOGS_BUFFER_SIZE         | Buffer for streaming logs                                                                                                         | 32768 (default)                                                                              |
@@ -41,6 +42,7 @@
 | STORAGE_EMULATOR_HOST    | GCS Storage Emulator Server                                                                                                       | http://localhost:9004                                                                        |
 | CONVERTER_ENABLE         | Whether to start converter of v1beta1 TaskRun/PipelineRun records to v1                                                           | true                                                                                         |
 | CONVERTER_DB_LIMIT       | How many records to convert at a time in a transaction                                                                            | 50                                                                                           |
+| FEATURE_GATES            | Configuration to enable/disable a feature                                                                                         | PartialResponse=true,foo=false,bar=true                                                      |
 
 These values can also be set in the config file located in the `config/env/config` directory.
 
