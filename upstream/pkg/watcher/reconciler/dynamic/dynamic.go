@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dynamic provides dynamic reconciliation for Tekton resources.
 package dynamic
 
 import (
