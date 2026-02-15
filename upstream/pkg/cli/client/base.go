@@ -1,4 +1,3 @@
-// Package client provides REST client functionality for the Results CLI.
 package client
 
 import (
@@ -97,10 +96,7 @@ func (c *RESTClient) DoRequest(ctx context.Context, method, url string, in proto
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
-	// Workaround for golangci-lint returned value not checked complaint
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

@@ -38,19 +38,15 @@ type resolverCache struct {
 	logger  *zap.SugaredLogger
 	ttl     time.Duration
 	maxSize int
-	clock   utilcache.Clock
+	clock   Clock
 }
 
 func newResolverCache(maxSize int, ttl time.Duration) *resolverCache {
-	return newResolverCacheWithClock(maxSize, ttl, realClock{})
-}
-
-func newResolverCacheWithClock(maxSize int, ttl time.Duration, clock utilcache.Clock) *resolverCache {
 	return &resolverCache{
-		cache:   utilcache.NewLRUExpireCacheWithClock(maxSize, clock),
+		cache:   utilcache.NewLRUExpireCache(maxSize),
 		ttl:     ttl,
 		maxSize: maxSize,
-		clock:   clock,
+		clock:   realClock{},
 	}
 }
 
@@ -92,8 +88,7 @@ func (c *resolverCache) Get(resolverType string, params []pipelinev1.Param) (res
 	}
 
 	c.infow("Cache hit", "key", key)
-	timestamp := c.clock.Now().Format(time.RFC3339)
-	return newAnnotatedResource(resource, resolverType, cacheOperationRetrieve, timestamp), true
+	return newAnnotatedResource(resource, resolverType, cacheOperationRetrieve, c.clock), true
 }
 
 func (c *resolverCache) infow(msg string, keysAndValues ...any) {
@@ -112,8 +107,7 @@ func (c *resolverCache) Add(
 	key := generateCacheKey(resolverType, params)
 	c.infow("Adding to cache", "key", key, "expiration", c.ttl)
 
-	timestamp := c.clock.Now().Format(time.RFC3339)
-	annotatedResource := newAnnotatedResource(resource, resolverType, cacheOperationStore, timestamp)
+	annotatedResource := newAnnotatedResource(resource, resolverType, cacheOperationStore, c.clock)
 
 	c.cache.Add(key, annotatedResource, c.ttl)
 
