@@ -192,8 +192,8 @@ func TestRecorder_DurationAndCountDeleted(t *testing.T) {
 			}
 
 			logger := logtesting.TestLogger(t)
-			unregisterViews(logger)
-			_ = registerViews(logger, cfg)
+			viewUnregister(logger)
+			_ = viewRegister(logger, cfg)
 
 			if err := r.DurationAndCountDeleted(context.Background(), cfg, tt.taskRun); (err != nil) != tt.wantErr {
 				t.Errorf("DurationAndCountDeleted() error = %v, wantErr %v", err, tt.wantErr)
