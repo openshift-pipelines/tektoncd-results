@@ -1,4 +1,5 @@
 //go:build conformance || e2e || examples || featureflags
+// +build conformance e2e examples featureflags
 
 /*
 Copyright 2023 The Tekton Authors

@@ -1,4 +1,3 @@
-// Package config provides configuration management for the Results CLI.
 package config
 
 import (
@@ -158,7 +157,7 @@ func (c *config) LoadClientConfig() error {
 }
 
 func (c *config) SetVersion() {
-	c.Extension.SetGroupVersionKind(schema.GroupVersionKind{
+	c.Extension.TypeMeta.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   Group,
 		Version: Version,
 		Kind:    Kind,

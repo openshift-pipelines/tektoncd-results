@@ -1,4 +1,4 @@
-package common //nolint:revive // Package provides shared CLI utilities
+package common
 
 import (
 	"errors"

@@ -1,4 +1,3 @@
-// Package pipelinerun provides CLI commands for PipelineRun resources.
 package pipelinerun
 
 import (
@@ -147,7 +146,7 @@ Describe a PipelineRun as json:
 			}
 			return nil
 		},
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
 			opts.Client = p.RESTClient()
 			if len(args) > 0 {
