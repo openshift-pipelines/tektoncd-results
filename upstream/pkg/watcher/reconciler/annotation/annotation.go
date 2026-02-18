@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package annotation provides utilities for managing Result annotations on Tekton resources.
 package annotation
 
 import (
