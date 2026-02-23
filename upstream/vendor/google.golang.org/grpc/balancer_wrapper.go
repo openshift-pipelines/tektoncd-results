@@ -26,7 +26,6 @@ import (
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/experimental/stats"
 	"google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/balancer/gracefulswitch"
 	"google.golang.org/grpc/internal/channelz"
@@ -60,7 +59,6 @@ var (
 // It uses the gracefulswitch.Balancer internally to ensure that balancer
 // switches happen in a graceful manner.
 type ccBalancerWrapper struct {
-	internal.EnforceClientConnEmbedding
 	// The following fields are initialized when the wrapper is created and are
 	// read-only afterwards, and therefore can be accessed without a mutex.
 	cc               *ClientConn
@@ -94,16 +92,13 @@ func newCCBalancerWrapper(cc *ClientConn) *ccBalancerWrapper {
 			CustomUserAgent: cc.dopts.copts.UserAgent,
 			ChannelzParent:  cc.channelz,
 			Target:          cc.parsedTarget,
+			MetricsRecorder: cc.metricsRecorderList,
 		},
 		serializer:       grpcsync.NewCallbackSerializer(ctx),
 		serializerCancel: cancel,
 	}
 	ccb.balancer = gracefulswitch.NewBalancer(ccb, ccb.opts)
 	return ccb
-}
-
-func (ccb *ccBalancerWrapper) MetricsRecorder() stats.MetricsRecorder {
-	return ccb.cc.metricsRecorderList
 }
 
 // updateClientConnState is invoked by grpc to push a ClientConnState update to
@@ -420,7 +415,7 @@ func (acbw *acBalancerWrapper) GetOrBuildProducer(pb balancer.ProducerBuilder) (
 		}
 		acbw.producersMu.Unlock()
 	}
-	return pData.producer, sync.OnceFunc(unref)
+	return pData.producer, grpcsync.OnceFunc(unref)
 }
 
 func (acbw *acBalancerWrapper) closeProducers() {
@@ -450,14 +445,13 @@ func (acbw *acBalancerWrapper) healthListenerRegFn() func(context.Context, func(
 	if acbw.ccb.cc.dopts.disableHealthCheck {
 		return noOpRegisterHealthListenerFn
 	}
-	cfg := acbw.ac.cc.healthCheckConfig()
-	if cfg == nil {
-		return noOpRegisterHealthListenerFn
-	}
 	regHealthLisFn := internal.RegisterClientHealthCheckListener
 	if regHealthLisFn == nil {
 		// The health package is not imported.
-		channelz.Error(logger, acbw.ac.channelz, "Health check is requested but health package is not imported.")
+		return noOpRegisterHealthListenerFn
+	}
+	cfg := acbw.ac.cc.healthCheckConfig()
+	if cfg == nil {
 		return noOpRegisterHealthListenerFn
 	}
 	return func(ctx context.Context, listener func(balancer.SubConnState)) func() {
