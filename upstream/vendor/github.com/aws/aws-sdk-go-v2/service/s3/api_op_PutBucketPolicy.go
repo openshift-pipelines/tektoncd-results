@@ -67,10 +67,6 @@ import (
 //
 // [DeleteBucket]
 //
-// You must URL encode any signed header values that contain spaces. For example,
-// if your header value is my file.txt , containing two spaces after my , you must
-// URL encode this value to my%20%20file.txt .
-//
 // [Bucket policy examples]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/example-bucket-policies.html
 // [Concepts for directory buckets in Local Zones]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-lzs-for-directory-buckets.html
 // [Example bucket policies for S3 Express One Zone]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-security-iam-example-bucket-policies.html
@@ -129,15 +125,15 @@ type PutBucketPolicyInput struct {
 	// For the x-amz-checksum-algorithm  header, replace  algorithm  with the
 	// supported algorithm from the following list:
 	//
-	//   - CRC32
+	//   - CRC-32
 	//
-	//   - CRC32C
+	//   - CRC-32C
 	//
-	//   - CRC64NVME
+	//   - CRC-64NVME
 	//
-	//   - SHA1
+	//   - SHA-1
 	//
-	//   - SHA256
+	//   - SHA-256
 	//
 	// For more information, see [Checking object integrity] in the Amazon S3 User Guide.
 	//
@@ -264,9 +260,6 @@ func (c *Client) addOperationPutBucketPolicyMiddlewares(stack *middleware.Stack,
 	if err = addRequestChecksumMetricsTracking(stack, options); err != nil {
 		return err
 	}
-	if err = addCredentialSource(stack, options); err != nil {
-		return err
-	}
 	if err = addOpPutBucketPolicyValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -306,13 +299,16 @@ func (c *Client) addOperationPutBucketPolicyMiddlewares(stack *middleware.Stack,
 	if err = s3cust.AddExpressDefaultChecksumMiddleware(stack); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
 		return err
 	}
-	if err = addInterceptAttempt(stack, options); err != nil {
+	if err = addSpanInitializeEnd(stack); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil

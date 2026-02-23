@@ -33,7 +33,7 @@ var _ ConfigStore = ConfigStores{}
 
 func (stores ConfigStores) ToContext(ctx context.Context) context.Context {
 	for _, s := range stores {
-		ctx = s.ToContext(ctx) //nolint:fatcontext
+		ctx = s.ToContext(ctx)
 	}
 	return ctx
 }
