@@ -34,7 +34,8 @@ LABEL \
       description="Red Hat OpenShift Pipelines Results Watcher" \
       io.openshift.tags="results,tekton,openshift,watcher"  \
       io.k8s.description="Red Hat OpenShift Pipelines Results Watcher" \
-      io.k8s.display-name="Red Hat OpenShift Pipelines Results Watcher"
+      io.k8s.display-name="Red Hat OpenShift Pipelines Results Watcher" \
+      cpe="cpe:/a:redhat:openshift_pipelines:1.21::el9"
 
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
