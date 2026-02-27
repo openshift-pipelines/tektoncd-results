@@ -29,7 +29,6 @@ import (
 //
 // +genclient
 // +genreconciler
-// +kubebuilder:storageversion
 type ResolutionRequest struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
@@ -51,7 +50,7 @@ type ResolutionRequest struct {
 type ResolutionRequestList struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata"`
 	Items           []ResolutionRequest `json:"items"`
 }
 
@@ -89,14 +88,10 @@ type ResolutionRequestStatusFields struct {
 	// object.
 	Data string `json:"data"`
 	// Deprecated: Use RefSource instead
-	// +kubebuilder:pruning:PreserveUnknownFields
-	// +kubebuilder:validation:Schemaless
 	Source *pipelinev1.RefSource `json:"source"`
 
 	// RefSource is the source reference of the remote data that records the url, digest
 	// and the entrypoint.
-	// +kubebuilder:pruning:PreserveUnknownFields
-	// +kubebuilder:validation:Schemaless
 	RefSource *pipelinev1.RefSource `json:"refSource"`
 }
 
