@@ -1,4 +1,3 @@
-// Package server provides the v1alpha2 API server implementation.
 package server
 
 import (
