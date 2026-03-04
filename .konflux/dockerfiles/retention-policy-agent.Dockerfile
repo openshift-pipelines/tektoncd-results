@@ -26,14 +26,15 @@ COPY head ${KO_DATA_PATH}/HEAD
 
 LABEL \
       com.redhat.component="openshift-pipelines-results-retention-policy-agent-rhel9-container" \
-      name="openshift-pipelines/pipelines-results-retention-policy-agent-rhel9" \
-      version=$VERSION \
-      summary="Red Hat OpenShift Pipelines Results retention policy agent" \
+      cpe="cpe:/a:redhat:openshift_pipelines:next::el9" \
+      description="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
+      io.k8s.description="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
+      io.k8s.display-name="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
+      io.openshift.tags="tekton,openshift,tektoncd-results,retention-policy-agent" \
       maintainer="pipelines-extcomm@redhat.com" \
-      description="Red Hat OpenShift Pipelines Results retention policy agent" \
-      io.k8s.display-name="Red Hat OpenShift Pipelines Results retention policy agent" \
-      io.k8s.description="Red Hat OpenShift Pipelines Results retention policy agent" \
-      io.openshift.tags="pipelines,tekton,openshift"
+      name="openshift-pipelines/pipelines-results-retention-policy-agent-rhel9" \
+      summary="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
+      version="next"
 
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
