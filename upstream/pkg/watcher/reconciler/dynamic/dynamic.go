@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package dynamic provides dynamic reconciliation for Tekton resources.
 package dynamic
 
 import (
@@ -36,6 +37,7 @@ import (
 	"github.com/tektoncd/results/pkg/watcher/convert"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
+	"github.com/tektoncd/results/pkg/watcher/reconciler/client"
 	"github.com/tektoncd/results/pkg/watcher/results"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"go.uber.org/zap"
@@ -43,7 +45,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/controller"
@@ -61,10 +62,11 @@ type Reconciler struct {
 	KubeClientSet kubernetes.Interface
 
 	resultsClient          *results.Client
-	objectClient           ObjectClient
+	objectClient           client.ObjectClient
 	cfg                    *reconciler.Config
 	IsReadyForDeletionFunc IsReadyForDeletion
 	AfterDeletion          AfterDeletion
+	AfterStorage           AfterStorage
 }
 
 func init() {
@@ -84,8 +86,11 @@ type IsReadyForDeletion func(ctx context.Context, object results.Object) (bool, 
 // AfterDeletion is the function called after object is deleted
 type AfterDeletion func(ctx context.Context, object results.Object) error
 
+// AfterStorage is called after an object has been successfully stored
+type AfterStorage func(ctx context.Context, object results.Object, storageSuccess bool) error
+
 // NewDynamicReconciler creates a new dynamic Reconciler.
-func NewDynamicReconciler(kubeClientSet kubernetes.Interface, rc pb.ResultsClient, lc pb.LogsClient, oc ObjectClient, cfg *reconciler.Config) *Reconciler {
+func NewDynamicReconciler(kubeClientSet kubernetes.Interface, rc pb.ResultsClient, lc pb.LogsClient, oc client.ObjectClient, cfg *reconciler.Config) *Reconciler {
 	return &Reconciler{
 		resultsClient: results.NewClient(rc, lc, cfg),
 		KubeClientSet: kubeClientSet,
@@ -117,31 +122,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 		}
 		ctxErr := ctx.Err()
 		if ctxErr == nil {
-			logger.Warnw("Leaving dynamic Reconciler somehow but the context channel is not closed",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()))
+			logger.Warn("Leaving dynamic Reconciler somehow but the context channel is not closed")
 			return
 		}
 		if ctxErr == context.Canceled {
-			logger.Infow("Leaving dynamic Reconciler normally with context properly canceled",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()))
+			logger.Debug("Leaving dynamic Reconciler normally with context properly canceled")
 			return
 		}
 		if ctxErr == context.DeadlineExceeded {
-			logger.Warnw("Leaving dynamic Reconciler only after context timeout",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()))
+			logger.Warn("Leaving dynamic Reconciler only after context timeout")
 			return
 		}
-		logger.Warnw("Leaving dynamic Reconciler with unexpected error",
-			zap.String("error", ctxErr.Error()),
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-			zap.String("name", o.GetName()))
+		logger.Warnw("Leaving dynamic Reconciler with unexpected error", zap.String("error", ctxErr.Error()))
 	}()
 
 	if o.GetObjectKind().GroupVersionKind().Empty() {
@@ -163,6 +155,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 
 	if err != nil {
 		logger.Debugw("Error upserting record to API server", zap.Error(err), timeTakenField)
+
 		if ctxCancel != nil {
 			ctxCancel()
 		}
@@ -174,12 +167,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 		if r.cfg == nil || r.cfg.UpdateLogTimeout == nil {
 			// single threaded for unit tests given fragility of fake k8s client
 			if err = r.sendLog(ctx, o); err != nil {
-				logger.Errorw("Error sending log",
-					zap.String("namespace", o.GetNamespace()),
-					zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-					zap.String("name", o.GetName()),
-					zap.Error(err),
-				)
+				logger.Errorw("Error sending log", zap.Error(err))
 			}
 
 		} else {
@@ -206,12 +194,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 
 				go func() {
 					if err = r.sendLog(backgroundCtx, o); err != nil {
-						logger.Errorw("Error sending log",
-							zap.String("namespace", o.GetNamespace()),
-							zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-							zap.String("name", o.GetName()),
-							zap.Error(err),
-						)
+						logger.Errorw("Error sending log", zap.Error(err))
 					}
 					once.Do(func() { close(stopCh) })
 					// TODO once we have the log status available, report the error there for retry if needed
@@ -220,10 +203,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 				select {
 				case <-eventTicker.C:
 					once.Do(func() { close(stopCh) })
-					logger.Warnw("Leaving sendLogs thread only after timeout",
-						zap.String("namespace", o.GetNamespace()),
-						zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-						zap.String("name", o.GetName()))
+					logger.Warn("Leaving sendLogs thread only after timeout")
 
 				case <-stopCh:
 					// this is safe to call twice, as it does not need to close its buffered channel
@@ -237,22 +217,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	// CreateEvents if enabled
 	if r.cfg.StoreEvent {
 		if err := r.storeEvents(ctx, o); err != nil {
-			logger.Errorw("Error storing eventlist",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()),
-				zap.Error(err),
-			)
+			logger.Errorw("Error storing eventlist", zap.Error(err))
 			if ctxCancel != nil {
 				ctxCancel()
 			}
 			return err
 		}
-		logger.Debugw("Successfully store eventlist",
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-			zap.String("name", o.GetName()),
-		)
+		logger.Debug("Successfully store eventlist")
 	}
 	logger = logger.With(zap.String("results.tekton.dev/result", res.Name),
 		zap.String("results.tekton.dev/record", rec.Name))
@@ -260,7 +231,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 
 	recordAnnotation := annotation.Annotation{Name: annotation.Record, Value: rec.GetName()}
 	resultAnnotation := annotation.Annotation{Name: annotation.Result, Value: res.GetName()}
-	if err = r.addResultsAnnotations(logging.WithLogger(ctx, logger), o, recordAnnotation, resultAnnotation); err != nil {
+	if err = r.addResultsAnnotations(ctx, o, recordAnnotation, resultAnnotation); err != nil {
 		// no grpc calls from addResultsAnnotation
 		if ctxCancel != nil {
 			ctxCancel()
@@ -268,8 +239,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 		return err
 	}
 
-	if err = r.deleteUponCompletion(logging.WithLogger(ctx, logger), o); err != nil {
-		// no grpc calls from addResultsAnnotation
+	if err = r.addChildReadyForDeletionAnnotations(ctx, o); err != nil {
+		if ctxCancel != nil {
+			ctxCancel()
+		}
+		return err
+	}
+
+	if err = r.deleteUponCompletion(ctx, o); err != nil {
+		// no grpc calls from deleteUponCompletion
 		if ctxCancel != nil {
 			ctxCancel()
 		}
@@ -278,7 +256,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	if ctxCancel != nil {
 		defer ctxCancel()
 	}
-	return r.addStoredAnnotations(logging.WithLogger(ctx, logger), o)
+	return r.addStoredAnnotations(ctx, o)
 }
 
 // addResultsAnnotations adds Results annotations to the object in question if
@@ -287,15 +265,9 @@ func (r *Reconciler) addResultsAnnotations(ctx context.Context, o results.Object
 	logger := logging.FromContext(ctx)
 	if r.cfg.GetDisableAnnotationUpdate() { //nolint:gocritic
 		logger.Debug("Skipping CRD annotation patch: annotation update is disabled")
-	} else if annotation.IsPatched(o, annotations...) {
-		logger.Debug("Skipping CRD annotation patch: Result annotations are already set")
 	} else {
-		// Update object with Result Annotations.
-		patch, err := annotation.Patch(o, annotations...)
+		err := annotation.Patch(ctx, o, r.objectClient, annotations...)
 		if err != nil {
-			return fmt.Errorf("error adding Result annotations: %w", err)
-		}
-		if err := r.objectClient.Patch(ctx, o.GetName(), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("error patching object: %w", err)
 		}
 	}
@@ -469,27 +441,14 @@ func (r *Reconciler) sendLog(ctx context.Context, o results.Object) error {
 			return err
 		}
 
-		logger.Debugw("Streaming log started",
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-			zap.String("name", o.GetName()),
-		)
+		logger.Debug("Streaming log started")
 
 		err = r.streamLogs(ctx, o, logType, logName)
 		if err != nil {
-			logger.Errorw("Error streaming log",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()),
-				zap.Error(err),
-			)
+			logger.Errorw("Error streaming log", zap.Error(err))
 			// TODO once we have the log status available, report the error there for retry if needed
 		}
-		logger.Infow("Streaming log completed",
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-			zap.String("name", o.GetName()),
-		)
+		logger.Info("Streaming log completed")
 
 	}
 
@@ -549,18 +508,12 @@ func (r *Reconciler) streamLogs(ctx context.Context, o results.Object, logType, 
 	bufStdout := inMemWriteBufferStdout.Bytes()
 	cntStdout, writeStdOutErr := writer.Write(bufStdout)
 	if writeStdOutErr != nil {
-		logger.Warnw("streamLogs in mem bufStdout write err",
-			zap.String("error", writeStdOutErr.Error()),
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("name", o.GetName()),
-		)
+		logger.Warnw("streamLogs in mem bufStdout write err", zap.String("error", writeStdOutErr.Error()))
 	}
 	if cntStdout != len(bufStdout) {
 		logger.Warnw("streamLogs bufStdout write len inconsistent",
 			zap.Int("in", len(bufStdout)),
 			zap.Int("out", cntStdout),
-			zap.String("namespace", o.GetNamespace()),
-			zap.String("name", o.GetName()),
 		)
 
 	}
@@ -578,8 +531,7 @@ func (r *Reconciler) streamLogs(ctx context.Context, o results.Object, logType, 
 
 	_, flushErr := writer.Flush()
 	if flushErr != nil {
-		logger.Warnw("flush ret err",
-			zap.String("error", flushErr.Error()))
+		logger.Warnw("flush ret err", zap.String("error", flushErr.Error()))
 		logger.Error(flushErr)
 		return flushErr
 	}
@@ -605,10 +557,7 @@ func (r *Reconciler) streamLogs(ctx context.Context, o results.Object, logType, 
 		return closeErr
 	}
 
-	logger.Debugw("Exiting streamLogs",
-		zap.String("namespace", o.GetNamespace()),
-		zap.String("name", o.GetName()),
-	)
+	logger.Debug("Exiting streamLogs")
 
 	return nil
 }
@@ -639,12 +588,7 @@ func (r *Reconciler) storeEvents(ctx context.Context, o results.Object) error {
 			FieldSelector: "involvedObject.uid=" + string(o.GetUID()),
 		})
 		if err != nil {
-			logger.Errorf("Failed to store events - retrieve",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()),
-				zap.String("err", err.Error()),
-			)
+			logger.Errorf("Failed to store events - retrieve", zap.String("err", err.Error()))
 			return err
 		}
 
@@ -657,9 +601,6 @@ func (r *Reconciler) storeEvents(ctx context.Context, o results.Object) error {
 			})
 			if err != nil {
 				logger.Errorf("Failed to fetch taskrun pod events",
-					zap.String("namespace", o.GetNamespace()),
-					zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-					zap.String("name", o.GetName()),
 					zap.String("podname", podName),
 					zap.String("err", err.Error()),
 				)
@@ -673,12 +614,7 @@ func (r *Reconciler) storeEvents(ctx context.Context, o results.Object) error {
 		data := filterEventList(events)
 		eventList, err := json.Marshal(data)
 		if err != nil {
-			logger.Errorf("Failed to store events - marshal",
-				zap.String("namespace", o.GetNamespace()),
-				zap.String("kind", o.GetObjectKind().GroupVersionKind().Kind),
-				zap.String("name", o.GetName()),
-				zap.String("err", err.Error()),
-			)
+			logger.Errorf("Failed to store events - marshal", zap.String("err", err.Error()))
 			return err
 		}
 
@@ -713,7 +649,7 @@ func filterEventList(events *v1.EventList) *v1.EventList {
 	return events
 }
 
-// addStoreAnnotations adds store annotations to the object in question if
+// addStoredAnnotations adds stored annotations to the object in question if
 // annotation patching is enabled.
 func (r *Reconciler) addStoredAnnotations(ctx context.Context, o results.Object) error {
 	logger := logging.FromContext(ctx)
@@ -757,20 +693,56 @@ func (r *Reconciler) addStoredAnnotations(ctx context.Context, o results.Object)
 		return nil
 	}
 
-	if annotation.IsPatched(o, stored) {
-		logger.Debugf("Skipping CRD annotation patch: Result Stored annotations are already set ObjectName: %s", o.GetName())
-		return nil
-	}
-
-	// Update object with Result Stored annotations.
-	patch, err := annotation.Patch(o, stored)
+	err := annotation.Patch(ctx, o, r.objectClient, stored)
 	if err != nil {
-		logger.Errorf("error adding stored annotations: %w ObjectName: %s", err, o.GetName())
-		return fmt.Errorf("error adding stored annotations: %w ObjectName: %s", err, o.GetName())
-	}
-	if err := r.objectClient.Patch(ctx, o.GetName(), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		logger.Errorf("error patching object with stored annotation: %w ObjectName: %s", err, o.GetName())
 		return fmt.Errorf("error patching object with stored annotation: %w ObjectName: %s", err, o.GetName())
 	}
+
+	// Call AfterStorage callback if this is the first time we're marking it as stored after completion
+	// This ensures storage latency metrics are recorded exactly once per object when it transitions
+	// from "not stored after completion" to "stored after completion"
+	if stored.Value == "true" && r.AfterStorage != nil {
+		logger.Debugw("Object stored after completion",
+			zap.String("object", o.GetName()),
+		)
+		if err := r.AfterStorage(ctx, o, true); err != nil {
+			logger.Warnw("Failed to call AfterStorage callback", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+// addChildReadyForDeletionAnnotations set the ChildReadyForDeletion annotation
+// on objects which have an owner and are done.
+func (r *Reconciler) addChildReadyForDeletionAnnotations(ctx context.Context, o results.Object) error {
+	logger := logging.FromContext(ctx)
+	if r.cfg.GetDisableAnnotationUpdate() { //nolint:gocritic
+		logger.Debug("Skipping CRD ChildReadyForDeletion annotation patch: annotation update is disabled")
+		return nil
+	}
+
+	if len(o.GetOwnerReferences()) == 0 {
+		return nil
+	}
+
+	doneObj, ok := o.(interface{ IsDone() bool })
+	if !ok {
+		logger.Errorf("Object %s does not have IsDone() method", o.GetName())
+		return fmt.Errorf("object does not have IsDone() method")
+	}
+	if !doneObj.IsDone() {
+		logger.Debug("Skipping ChildReadyForDeletion annotation patch: object is not done yet")
+		return nil
+	}
+
+	childReadyForDeletion := annotation.Annotation{Name: annotation.ChildReadyForDeletion, Value: "true"}
+	err := annotation.Patch(ctx, o, r.objectClient, childReadyForDeletion)
+	if err != nil {
+		logger.Errorf("error patching object with ChildReadyForDeletion annotation: %w ObjectName: %s", err, o.GetName())
+		return fmt.Errorf("error patching object with ChildReadyForDeletion annotation: %w ObjectName: %s", err, o.GetName())
+	}
+
 	return nil
 }
