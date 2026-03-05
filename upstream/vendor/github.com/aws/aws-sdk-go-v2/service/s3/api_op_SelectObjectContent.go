@@ -89,10 +89,6 @@ import (
 //
 // [PutBucketLifecycleConfiguration]
 //
-// You must URL encode any signed header values that contain spaces. For example,
-// if your header value is my file.txt , containing two spaces after my , you must
-// URL encode this value to my%20%20file.txt .
-//
 // [Appendix: SelectObjectContent Response]: https://docs.aws.amazon.com/AmazonS3/latest/API/RESTSelectObjectAppendix.html
 // [Selecting Content from Objects]: https://docs.aws.amazon.com/AmazonS3/latest/dev/selecting-content-from-objects.html
 // [PutBucketLifecycleConfiguration]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
@@ -299,9 +295,6 @@ func (c *Client) addOperationSelectObjectContentMiddlewares(stack *middleware.St
 	if err = addIsExpressUserAgent(stack); err != nil {
 		return err
 	}
-	if err = addCredentialSource(stack, options); err != nil {
-		return err
-	}
 	if err = addOpSelectObjectContentValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -335,13 +328,16 @@ func (c *Client) addOperationSelectObjectContentMiddlewares(stack *middleware.St
 	if err = addSerializeImmutableHostnameBucketMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
 		return err
 	}
-	if err = addInterceptAttempt(stack, options); err != nil {
+	if err = addSpanInitializeEnd(stack); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil
