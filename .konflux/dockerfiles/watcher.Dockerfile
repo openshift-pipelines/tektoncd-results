@@ -27,15 +27,15 @@ COPY head ${KO_DATA_PATH}/HEAD
 
 LABEL \
       com.redhat.component="openshift-pipelines-results-watcher-rhel9-container" \
-      name="openshift-pipelines/pipelines-results-watcher-rhel8" \
-      version=$VERSION \
-      summary="Red Hat OpenShift Pipelines Results Watcher" \
+      cpe="cpe:/a:redhat:openshift_pipelines:1.21::el9" \
+      description="Red Hat OpenShift Pipelines tektoncd-results watcher" \
+      io.k8s.description="Red Hat OpenShift Pipelines tektoncd-results watcher" \
+      io.k8s.display-name="Red Hat OpenShift Pipelines tektoncd-results watcher" \
+      io.openshift.tags="tekton,openshift,tektoncd-results,watcher" \
       maintainer="pipelines-extcomm@redhat.com" \
-      description="Red Hat OpenShift Pipelines Results Watcher" \
-      io.openshift.tags="results,tekton,openshift,watcher"  \
-      io.k8s.description="Red Hat OpenShift Pipelines Results Watcher" \
-      io.k8s.display-name="Red Hat OpenShift Pipelines Results Watcher" \
-      cpe="cpe:/a:redhat:openshift_pipelines:1.21::el9"
+      name="openshift-pipelines/pipelines-results-watcher-rhel9" \
+      summary="Red Hat OpenShift Pipelines tektoncd-results watcher" \
+      version="v1.21.1"
 
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
