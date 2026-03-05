@@ -35,7 +35,7 @@ import (
 // allowing it to run in namespaces with restriced pod security admission.
 // If the init container will run on windows, `windows` should be set to `true`,
 // so that the correct security context can be applied.
-func workingDirInit(workingdirinitImage string, stepContainers []corev1.Container, securityContext SecurityContextConfig, windows bool) *corev1.Container {
+func workingDirInit(workingdirinitImage string, stepContainers []corev1.Container, setSecurityContext, windows bool) *corev1.Container {
 	// Gather all unique workingDirs.
 	workingDirs := sets.NewString()
 	for _, step := range stepContainers {
@@ -60,6 +60,10 @@ func workingDirInit(workingdirinitImage string, stepContainers []corev1.Containe
 		// There are no workingDirs to initialize.
 		return nil
 	}
+	securityContext := LinuxSecurityContext
+	if windows {
+		securityContext = WindowsSecurityContext
+	}
 
 	c := &corev1.Container{
 		Name:         "working-dir-initializer",
@@ -69,9 +73,8 @@ func workingDirInit(workingdirinitImage string, stepContainers []corev1.Containe
 		WorkingDir:   pipeline.WorkspaceDir,
 		VolumeMounts: implicitVolumeMounts,
 	}
-	if securityContext.SetSecurityContext {
-		c.SecurityContext = securityContext.GetSecurityContext(windows)
+	if setSecurityContext {
+		c.SecurityContext = securityContext
 	}
-
 	return c
 }

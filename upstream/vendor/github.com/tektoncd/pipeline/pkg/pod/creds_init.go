@@ -25,10 +25,9 @@ import (
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	"github.com/tektoncd/pipeline/pkg/credentials"
 	"github.com/tektoncd/pipeline/pkg/credentials/dockercreds"
 	"github.com/tektoncd/pipeline/pkg/credentials/gitcreds"
-	credmatcher "github.com/tektoncd/pipeline/pkg/credentials/matcher"
-	credwriter "github.com/tektoncd/pipeline/pkg/credentials/writer"
 	"github.com/tektoncd/pipeline/pkg/names"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -75,10 +74,7 @@ func credsInit(ctx context.Context, obj runtime.Object, serviceAccountName, name
 		return nil, nil, nil, err
 	}
 
-	builders := []interface {
-		credmatcher.Matcher
-		credwriter.Writer
-	}{dockercreds.NewBuilder(), gitcreds.NewBuilder()}
+	builders := []credentials.Builder{dockercreds.NewBuilder(), gitcreds.NewBuilder()}
 
 	var volumeMounts []corev1.VolumeMount
 	var volumes []corev1.Volume
@@ -136,7 +132,7 @@ func credsInit(ctx context.Context, obj runtime.Object, serviceAccountName, name
 			name := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix("tekton-internal-secret-volume-" + sanitizedName)
 			volumeMounts = append(volumeMounts, corev1.VolumeMount{
 				Name:      name,
-				MountPath: credmatcher.VolumeName(secret.Name),
+				MountPath: credentials.VolumeName(secret.Name),
 			})
 			volumes = append(volumes, corev1.Volume{
 				Name: name,
