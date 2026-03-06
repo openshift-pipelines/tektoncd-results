@@ -20,78 +20,212 @@ import (
 	"testing"
 	"time"
 
-	"github.com/robfig/cron/v3"
-	"github.com/tektoncd/results/pkg/api/server/db"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/tektoncd/results/pkg/apis/config"
 	"go.uber.org/zap"
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-func TestAgent_job(t *testing.T) {
-	// Setup in-memory SQLite database
-	dbMem, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to connect to in-memory database: %v", err)
+func Test_buildCaseStatement(t *testing.T) {
+	type args struct {
+		policies         []config.Policy
+		defaultRetention time.Duration
 	}
-
-	// Auto migrate the schema
-	err = dbMem.AutoMigrate(&db.Record{}, &db.Result{})
-	if err != nil {
-		t.Fatalf("Failed to migrate database schema: %v", err)
-	}
-
-	// Create test agent
-	agent := &Agent{
-		db:     dbMem,
-		Logger: zap.NewExample().Sugar(),
-
-		RetentionPolicy: config.RetentionPolicy{
-			MaxRetention: 24 * time.Hour,
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "no policies",
+			args: args{
+				policies:         nil,
+				defaultRetention: 30 * 24 * time.Hour,
+			},
+			want: "NOW() - INTERVAL '2592000.000000 seconds'",
 		},
-		cron: cron.New(),
+		{
+			name: "with policies",
+			args: args{
+				policies: []config.Policy{
+					{
+						Selector: config.Selector{
+							MatchLabels: map[string][]string{"app": {"foo"}},
+						},
+						Retention: "10d",
+					},
+				},
+				defaultRetention: 30 * 24 * time.Hour,
+			},
+			want: "CASE WHEN data->'metadata'->'labels'->>'app' IN ('foo') THEN NOW() - INTERVAL '864000.000000 seconds' ELSE NOW() - INTERVAL '2592000.000000 seconds' END",
+		},
+		{
+			name: "with policies without suffix",
+			args: args{
+				policies: []config.Policy{
+					{
+						Selector: config.Selector{
+							MatchLabels: map[string][]string{"app": {"foo"}},
+						},
+						Retention: "10",
+					},
+				},
+				defaultRetention: 30 * 24 * time.Hour,
+			},
+			want: "CASE WHEN data->'metadata'->'labels'->>'app' IN ('foo') THEN NOW() - INTERVAL '864000.000000 seconds' ELSE NOW() - INTERVAL '2592000.000000 seconds' END",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildCaseStatement(tt.args.policies, tt.args.defaultRetention)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("buildCaseStatement() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("buildCaseStatement() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_buildWhereClause(t *testing.T) {
+	type args struct {
+		selector config.Selector
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "empty selector",
+			args: args{
+				selector: config.Selector{},
+			},
+			want: "1=1",
+		},
+		{
+			name: "with labels",
+			args: args{
+				selector: config.Selector{
+					MatchLabels: map[string][]string{"app": {"foo"}},
+				},
+			},
+			want: "data->'metadata'->'labels'->>'app' IN ('foo')",
+		},
+		{
+			name: "with annotations",
+			args: args{
+				selector: config.Selector{
+					MatchAnnotations: map[string][]string{"tekton.dev/image": {"bar"}},
+				},
+			},
+			want: "data->'metadata'->'annotations'->>'tekton.dev/image' IN ('bar')",
+		},
+		{
+			name: "with status",
+			args: args{
+				selector: config.Selector{
+					MatchStatuses: []string{"Succeeded"},
+				},
+			},
+			want: "data->'status'->'conditions'->0->>'reason' IN ('Succeeded')",
+		},
+		{
+			name: "with namespace",
+			args: args{
+				selector: config.Selector{
+					MatchNamespaces: []string{"prod"},
+				},
+			},
+			want: "parent IN ('prod')",
+		},
+		{
+			name: "with multiple conditions",
+			args: args{
+				selector: config.Selector{
+					MatchNamespaces: []string{"prod"},
+					MatchLabels:     map[string][]string{"app": {"foo"}},
+					MatchStatuses:   []string{"Succeeded"},
+				},
+			},
+			want: "parent IN ('prod') AND data->'metadata'->'labels'->>'app' IN ('foo') AND data->'status'->'conditions'->0->>'reason' IN ('Succeeded')",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildWhereClause(tt.args.selector)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("buildWhereClause() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("buildWhereClause() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgent_cleanupResults(t *testing.T) {
+	// Create a new mock database
+	mockDb, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("unexpected error when opening a stub database connection: %v", err)
+	}
+	defer mockDb.Close()
+
+	// Create a new gorm DB using the sqlmock connection
+	gormDb, err := gorm.Open(postgres.New(postgres.Config{
+		Conn: mockDb,
+	}), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("unexpected error when opening a gorm database: %v", err)
 	}
 
-	// Insert test data
-	now := time.Now()
-	oldResult := db.Result{UpdatedTime: now.Add(-25 * time.Hour), Parent: "foo", ID: "foo", Name: "foo"}
-	newResult := db.Result{UpdatedTime: now, Parent: "foo", ID: "foo-new", Name: "foo-new"}
+	// Use a no-op logger for tests
+	logger := zap.NewNop()
 
-	oldRecord := db.Record{UpdatedTime: now.Add(-25 * time.Hour), Parent: "foo",
-		Result:     oldResult,
-		ResultName: "foo", ResultID: "foo", ID: "foo"}
-	newRecord := db.Record{UpdatedTime: now, Parent: "foo",
-		Result:     newResult,
-		ResultName: "foo-new", ResultID: "foo-new", ID: "foo-new"}
-
-	dbMem.Save(&oldRecord)
-	dbMem.Create(&newRecord)
-
-	// Run the job
-	agent.job()
-
-	// Check if old records and results are deleted
-	var count int64
-	dbMem.Model(&db.Record{}).Count(&count)
-	if count != 1 {
-		t.Errorf("Expected 1 record, got %d", count)
+	agent := &Agent{
+		db:     gormDb,
+		Logger: logger.Sugar(),
 	}
 
-	dbMem.Model(&db.Result{}).Count(&count)
-	if count != 1 {
-		t.Errorf("Expected 1 result, got %d", count)
+	tests := []struct {
+		name       string
+		recordType string
+		// regex that must match the Exec'd SQL
+		wantQuery string
+	}{
+		{
+			name:       "cleanup pipelineruns",
+			recordType: "tekton.dev/v1.PipelineRun",
+			// match core structure; dot matches newline; allow flexible whitespace
+			wantQuery: `(?s)DELETE\s+FROM\s+results\s+WHERE\s+id\s+IN\s*\(\s*SELECT\s+result_id\s+FROM\s*\(\s*SELECT\s+r\.result_id,.*r\.updated_time,.*AS\s+expiration_time.*FROM\s+records\s+r.*WHERE\s+r\.type\s*=\s*'tekton\.dev/v1\.PipelineRun'.*\)\s+AS\s+subquery\s+WHERE\s+updated_time\s*<\s*expiration_time\s*\)`,
+		},
+		{
+			name:       "cleanup taskruns",
+			recordType: "tekton.dev/v1.TaskRun",
+			// allow an optional AND NOT EXISTS (...) inside the inner WHERE
+			wantQuery: `(?s)DELETE\s+FROM\s+results\s+WHERE\s+id\s+IN\s*\(\s*SELECT\s+result_id\s+FROM\s*\(\s*SELECT\s+r\.result_id,.*r\.updated_time,.*AS\s+expiration_time.*FROM\s+records\s+r.*WHERE\s+r\.type\s*=\s*'tekton\.dev/v1\.TaskRun'\s*(?:AND\s+NOT\s+EXISTS\s*\(.*\)\s*)?.*\)\s+AS\s+subquery\s+WHERE\s+updated_time\s*<\s*expiration_time\s*\)`,
+		},
 	}
 
-	// Check if new records and results are retained
-	var remainingRecord db.Record
-	dbMem.First(&remainingRecord)
-	if !remainingRecord.UpdatedTime.Equal(newRecord.UpdatedTime) {
-		t.Errorf("Expected remaining record to be the new one")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Expect the Exec of the SQL that matches the regex. Return success.
+			mock.ExpectExec(tt.wantQuery).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	var remainingResult db.Result
-	dbMem.First(&remainingResult)
-	if !remainingResult.UpdatedTime.Equal(newResult.UpdatedTime) {
-		t.Errorf("Expected remaining result to be the new one")
+			// Call function. It logs error internally; it doesn't return error.
+			agent.cleanupResults("NOW()", tt.recordType)
+
+			// Verify expectations.
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unfulfilled expectations: %v", err)
+			}
+		})
 	}
 }
