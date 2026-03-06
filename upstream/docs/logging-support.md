@@ -35,6 +35,12 @@ region = us-east-1
 endpoint_url = https://play.min.io:9000
 ```
 
+## Splunk
+ The following environment variables are required:
+- `SPLUNK_SEARCH_TOKEN`: Token with permission to use search api in splunk.
+- `LOGGING_PLUGIN_API_URL`: The URL of the splunk alongwith port.
+- `LOGGING_PLUGIN_QUERY_PARAMS`: Index needs to be passed as index=name where name is the index name.
+
 ## Common Configuration
 
 These are the common configuration options for all third party logging APIs.
@@ -51,3 +57,4 @@ These are the common configuration options for all third party logging APIs.
 - `LOGGING_PLUGIN_FORWARDER_DELAY_DURATION`: This is the max duration in minutes taken by third party logging system to forward and store the logs after completion of taskrun and pipelinerun. This is used to search between start time of runs and completion plus buffer duration.
 - `LOGGING_PLUGIN_QUERY_LIMIT`: Sets the query limit for Third Party Logging API if logging backend has a limit on number of log lines returned.
 - `LOGGING_PLUGIN_QUERY_PARAMS`: Sets the query params for Third Party Logging API, these can be direction/sort order.Specify them in this format: "foo=bar&direction=backward"
+- `LOGGING_PLUGIN_MULTIPART_REGEX`: Sets a Regex for matching parts of the same log. Some log backends (e.g S3) store objects immutably, once stored, you can't append. For long running TaskRun steps, it's not effective to keep such log in memory until the step completes. Instead one can store the log in multiple parts with a name suffix (e.g `-1743932245` seconds since the Epoch) and set a regex to match the parts of the same log (e.g `-\d{10}$`). (optional)
