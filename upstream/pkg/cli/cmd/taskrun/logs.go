@@ -14,6 +14,7 @@ import (
 	"github.com/tektoncd/results/pkg/cli/client/logs"
 	"github.com/tektoncd/results/pkg/cli/client/records"
 	"github.com/tektoncd/results/pkg/cli/common"
+	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 )
 
@@ -59,9 +60,13 @@ Logs are only available for completed TaskRuns. Running TaskRuns do not have log
 			}
 			return nil
 		},
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
-			opts.Client = p.RESTClient()
+			var err error
+			opts.Client, err = prerun.InitClient(p, cmd)
+			if err != nil {
+				return err
+			}
 			if len(args) > 0 {
 				opts.ResourceName = args[0]
 			}
@@ -137,9 +142,7 @@ Logs are only available for completed TaskRuns. Running TaskRuns do not have log
 
 			// Close the reader if it implements io.Closer
 			if closer, ok := reader.(io.Closer); ok {
-				defer func() {
-					_ = closer.Close()
-				}()
+				defer closer.Close()
 			}
 
 			// Copy the logs to stdout
