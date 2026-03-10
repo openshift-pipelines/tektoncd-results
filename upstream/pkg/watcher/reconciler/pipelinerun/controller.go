@@ -12,27 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package pipelinerun provides the PipelineRun reconciler controller.
 package pipelinerun
 
 import (
 	"context"
 
-	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
 	"github.com/tektoncd/results/pkg/apis/config"
-	"github.com/tektoncd/results/pkg/metrics"
 	"github.com/tektoncd/results/pkg/pipelinerunmetrics"
-	"github.com/tektoncd/results/pkg/watcher/logs"
-	"github.com/tektoncd/results/pkg/watcher/reconciler"
-	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"knative.dev/pkg/configmap"
-	"knative.dev/pkg/controller"
-	"knative.dev/pkg/logging"
 
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
 	pipelineruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/pipelinerun"
 	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
+	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
+	"github.com/tektoncd/results/pkg/watcher/logs"
+	"github.com/tektoncd/results/pkg/watcher/reconciler"
+	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
+	"k8s.io/client-go/tools/cache"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
+	"knative.dev/pkg/controller"
+	"knative.dev/pkg/logging"
 )
 
 // NewController creates a Controller for watching PipelineRuns.
@@ -45,22 +44,19 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 	pipelineRunInformer := pipelineruninformer.Get(ctx)
 	pipelineRunLister := pipelineRunInformer.Lister()
 	logger := logging.FromContext(ctx)
-	configStore := config.NewStore(logger.Named("config-store"),
-		metrics.OnStore(logger),
-		pipelinerunmetrics.MetricsOnStore(logger))
+	configStore := config.NewStore(logger.Named("config-store"), pipelinerunmetrics.MetricsOnStore(logger))
 	configStore.WatchConfigs(cmw)
 
 	c := &Reconciler{
-		kubeClientSet:      kubeclient.Get(ctx),
-		resultsClient:      resultsClient,
-		logsClient:         logs.Get(ctx),
-		pipelineRunLister:  pipelineRunLister,
-		taskRunLister:      taskruninformer.Get(ctx).Lister(),
-		pipelineClient:     pipelineclient.Get(ctx),
-		cfg:                cfg,
-		configStore:        configStore,
-		metrics:            metrics.NewRecorder(),
-		pipelineRunMetrics: pipelinerunmetrics.NewRecorder(),
+		kubeClientSet:     kubeclient.Get(ctx),
+		resultsClient:     resultsClient,
+		logsClient:        logs.Get(ctx),
+		pipelineRunLister: pipelineRunLister,
+		taskRunLister:     taskruninformer.Get(ctx).Lister(),
+		pipelineClient:    pipelineclient.Get(ctx),
+		cfg:               cfg,
+		configStore:       configStore,
+		metrics:           pipelinerunmetrics.NewRecorder(),
 	}
 
 	impl := pipelinerunreconciler.NewImpl(ctx, c, func(_ *controller.Impl) controller.Options {
@@ -72,7 +68,10 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 		}
 	})
 
-	_, err := pipelineRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+	_, err := pipelineRunInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    impl.Enqueue,
+		UpdateFunc: controller.PassNew(impl.Enqueue),
+	})
 	if err != nil {
 		logger.Panicf("Couldn't register PipelineRun informer event handler: %w", err)
 	}
