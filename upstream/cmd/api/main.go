@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package main provides the entry point for the Results API server.
 package main
 
 import (
@@ -23,7 +22,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -50,7 +48,6 @@ import (
 	_ "net/http/pprof"
 
 	serverdb "github.com/tektoncd/results/pkg/api/server/db"
-	_ "github.com/tektoncd/results/pkg/api/server/db/errors/postgres"
 
 	"github.com/golang-jwt/jwt/v4"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -64,7 +61,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tektoncd/results/pkg/api/server/config"
 	"github.com/tektoncd/results/pkg/api/server/logger"
-	"github.com/tektoncd/results/pkg/api/server/tlsconfig"
 	v1alpha2 "github.com/tektoncd/results/pkg/api/server/v1alpha2"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/auth"
 	v1alpha2pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
@@ -94,51 +90,14 @@ func main() {
 		log.Errorf("Failed to load feature gates: %v", err)
 	}
 
-	// Load server TLS configuration
+	// Load server TLS
 	certFile := path.Join(serverConfig.TLS_PATH, "tls.crt")
 	keyFile := path.Join(serverConfig.TLS_PATH, "tls.key")
-
-	var creds credentials.TransportCredentials
-	var tlsError error
-	var serverTLSConfig *tls.Config
-
-	// Load TLS configuration
-	// If any TLS env var is directly set (operator injection), use ONLY env vars for complete override
-	// This avoids mixing ConfigMap and operator settings which could result in incompatible combinations
-	var tlsConf *tlsconfig.Config
-	if tlsconfig.HasEnvOverrides() {
-		tlsConf = tlsconfig.LoadFromEnv(os.Getenv)
-		log.Debug("TLS configuration loaded from environment variables")
-	} else {
-		tlsConf = tlsconfig.New(serverConfig.TLS_MIN_VERSION, serverConfig.TLS_CIPHER_SUITES, serverConfig.TLS_CURVE_PREFERENCES)
-		log.Debug("TLS configuration loaded from config file")
-	}
-	serverTLSConfig, tlsConfErr := tlsConf.ToTLSConfig()
-	if tlsConfErr != nil {
-		log.Errorf("Error parsing TLS configuration: %v", tlsConfErr)
-		log.Warn("Using default TLS configuration")
-		// Use Go's defaults - only set NextProtos for HTTP/2 support
-		serverTLSConfig = &tls.Config{
-			NextProtos: []string{"h2", "http/1.1"},
-		}
-	} else {
-		log.Infof("TLS Configuration: MinVersion=%s, CipherSuites=[%s], CurvePreferences=[%s]",
-			tlsconfig.GetTLSVersionName(serverTLSConfig.MinVersion),
-			tlsconfig.FormatCipherSuites(serverTLSConfig.CipherSuites),
-			tlsconfig.FormatCurvePreferences(serverTLSConfig.CurvePreferences))
-	}
-
-	// Load certificate and key
-	cert, certErr := tls.LoadX509KeyPair(certFile, keyFile)
-	if certErr != nil {
-		log.Errorf("Error loading TLS certificate: %v", certErr)
+	creds, tlsError := credentials.NewServerTLSFromFile(certFile, keyFile)
+	if tlsError != nil {
+		log.Errorf("Error loading server TLS: %v", tlsError)
 		log.Warn("TLS will be disabled")
 		creds = insecure.NewCredentials()
-		tlsError = certErr
-	} else {
-		// Apply certificate to TLS config
-		serverTLSConfig.Certificates = []tls.Certificate{cert}
-		creds = credentials.NewTLS(serverTLSConfig)
 	}
 
 	if serverConfig.DB_USER == "" || serverConfig.DB_PASSWORD == "" {
@@ -159,37 +118,18 @@ func main() {
 
 	dbURI := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s sslrootcert=%s", serverConfig.DB_HOST, serverConfig.DB_USER, serverConfig.DB_PASSWORD, serverConfig.DB_NAME, serverConfig.DB_PORT, serverConfig.DB_SSLMODE, serverConfig.DB_SSLROOTCERT)
 
-	gormConfig := &gorm.Config{
-		DisableAutomaticPing: true, // manual polling handles readiness with context-aware ping
-	}
+	gormConfig := &gorm.Config{}
 	if err = serverdb.SetLogLevel(serverConfig.SQL_LOG_LEVEL); err != nil {
 		log.Warnf("Failed to configure sql log level: %v", err)
 	}
 
 	// Retry database connection, sometimes the database is not ready to accept connection
-	ctx := context.Background()
-	err = wait.PollUntilContextTimeout(ctx, 10*time.Second, 2*time.Minute, true, func(pollCtx context.Context) (bool, error) {
-		connection, err := gorm.Open(postgres.Open(dbURI), gormConfig)
+	err = wait.PollImmediate(10*time.Second, 2*time.Minute, func() (bool, error) { //nolint:staticcheck
+		db, err = gorm.Open(postgres.Open(dbURI), gormConfig)
 		if err != nil {
 			log.Warnf("Error connecting to database (retrying in 10s): %v", err)
 			return false, nil
 		}
-		sqlConn, err := connection.DB()
-		if err != nil {
-			log.Warnf("Error retrieving database handle (retrying in 10s): %v", err)
-			return false, nil
-		}
-		if err := sqlConn.PingContext(pollCtx); err != nil {
-			if closeErr := sqlConn.Close(); closeErr != nil {
-				log.Debugf("Failed to close db handle after ping failure: %v", closeErr)
-			}
-			if pollCtx.Err() != nil {
-				return false, pollCtx.Err()
-			}
-			log.Warnf("Database ping failed (retrying in 10s): %v", err)
-			return false, nil
-		}
-		db = connection
 		return true, nil
 	})
 	if err != nil {
@@ -293,7 +233,7 @@ func main() {
 
 	svrOpts := []grpc.ServerOption{
 		grpc.Creds(creds),
-		grpc_middleware.WithUnaryServerChain( //nolint:staticcheck // TODO: migrate to grpc.ChainUnaryInterceptor
+		grpc_middleware.WithUnaryServerChain(
 			// The grpc_ctxtags context updater should be before everything else
 			grpc_ctxtags.UnaryServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_zap.UnaryServerInterceptor(grpcLogger, zapOpts...),
@@ -302,7 +242,7 @@ func main() {
 			fieldmask.UnaryServerInterceptor(f.Get(features.PartialResponse)),
 			recovery.UnaryServerInterceptor(recovery.WithRecoveryHandler(recoveryHandler)),
 		),
-		grpc_middleware.WithStreamServerChain( //nolint:staticcheck // TODO: migrate to grpc.ChainStreamInterceptor
+		grpc_middleware.WithStreamServerChain(
 			// The grpc_ctxtags context updater should be before everything else
 			grpc_ctxtags.StreamServerInterceptor(grpc_ctxtags.WithFieldExtractor(grpc_ctxtags.CodeGenRequestFieldExtractor)),
 			grpc_zap.StreamServerInterceptor(grpcLogger, zapOpts...),
@@ -364,10 +304,8 @@ func main() {
 	// Load client TLS to dial gRPC
 	if tlsError == nil {
 		// This is an internal client to proxy request from the REST listener to gRPC listener.
-		// So we don't need certificate verification here, but we still use the same TLS profile
-		clientTLSConfig := serverTLSConfig.Clone()
-		clientTLSConfig.InsecureSkipVerify = true
-		creds = credentials.NewTLS(clientTLSConfig)
+		// So we don't need certificate verification here.
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
 	}
 
 	// Setup gRPC gateway to proxy request to gRPC health checks
@@ -381,6 +319,7 @@ func main() {
 	)
 
 	// Create server for gRPC gateway
+	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var httpMux http.Handler
@@ -412,14 +351,7 @@ func main() {
 	if tlsError != nil {
 		log.Fatal(http.ListenAndServe(":"+serverConfig.SERVER_PORT, grpcHandler(gs, httpMux)))
 	}
-
-	// Create HTTP server with TLS config
-	httpServer := &http.Server{
-		Addr:      ":" + serverConfig.SERVER_PORT,
-		Handler:   grpcHandler(gs, httpMux),
-		TLSConfig: serverTLSConfig,
-	}
-	log.Fatal(httpServer.ListenAndServeTLS(certFile, keyFile))
+	log.Fatal(http.ListenAndServeTLS(":"+serverConfig.SERVER_PORT, certFile, keyFile, grpcHandler(gs, httpMux)))
 }
 
 // grpcHandler forwards the request to gRPC server based on the Content-Type header.

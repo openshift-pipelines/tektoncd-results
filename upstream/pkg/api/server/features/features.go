@@ -1,4 +1,3 @@
-// Package features provides feature flag management for the API server.
 package features
 
 import (
