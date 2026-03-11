@@ -1,4 +1,3 @@
-// Package format provides output formatting utilities for the CLI.
 package format
 
 import (
@@ -25,36 +24,26 @@ func PrintProto(w io.Writer, m proto.Message, format string) error {
 		tw := tabwriter.NewWriter(w, 40, 2, 2, ' ', 0)
 		switch t := m.(type) {
 		case *pb.ListResultsResponse:
-			if _, err := fmt.Fprintln(tw, strings.Join([]string{"Name", "Start", "Update"}, "\t")); err != nil {
-				return err
-			}
+			fmt.Fprintln(tw, strings.Join([]string{"Name", "Start", "Update"}, "\t"))
 			for _, r := range t.GetResults() {
-				if _, err := fmt.Fprintln(tw, strings.Join([]string{
+				fmt.Fprintln(tw, strings.Join([]string{
 					r.GetName(),
 					r.GetCreateTime().AsTime().Truncate(time.Second).Local().String(),
 					r.GetUpdateTime().AsTime().Truncate(time.Second).Local().String(),
-				}, "\t")); err != nil {
-					return err
-				}
+				}, "\t"))
 			}
 		case *pb.ListRecordsResponse:
-			if _, err := fmt.Fprintln(tw, strings.Join([]string{"Name", "Type", "Start", "Update"}, "\t")); err != nil {
-				return err
-			}
+			fmt.Fprintln(tw, strings.Join([]string{"Name", "Type", "Start", "Update"}, "\t"))
 			for _, r := range t.GetRecords() {
-				if _, err := fmt.Fprintln(tw, strings.Join([]string{
+				fmt.Fprintln(tw, strings.Join([]string{
 					r.GetName(),
 					r.GetData().GetType(),
 					r.GetCreateTime().AsTime().Truncate(time.Second).Local().String(),
 					r.GetUpdateTime().AsTime().Truncate(time.Second).Local().String(),
-				}, "\t")); err != nil {
-					return err
-				}
+				}, "\t"))
 			}
 		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
+		tw.Flush()
 	case "textproto":
 		opts := prototext.MarshalOptions{
 			Multiline: true,
