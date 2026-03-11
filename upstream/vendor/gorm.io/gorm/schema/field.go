@@ -458,12 +458,20 @@ func (field *Field) setupValuerAndSetter(modelType reflect.Type) {
 	case len(field.StructField.Index) == 1 && fieldIndex >= 0:
 		field.ValueOf = func(ctx context.Context, v reflect.Value) (interface{}, bool) {
 			v = reflect.Indirect(v)
+			if v.Type() != modelType {
+				fieldValue := v.FieldByName(field.Name)
+				return fieldValue.Interface(), fieldValue.IsZero()
+			}
 			fieldValue := v.Field(fieldIndex)
 			return fieldValue.Interface(), fieldValue.IsZero()
 		}
 	default:
 		field.ValueOf = func(ctx context.Context, v reflect.Value) (interface{}, bool) {
 			v = reflect.Indirect(v)
+			if v.Type() != modelType {
+				fieldValue := v.FieldByName(field.Name)
+				return fieldValue.Interface(), fieldValue.IsZero()
+			}
 			for _, fieldIdx := range field.StructField.Index {
 				if fieldIdx >= 0 {
 					v = v.Field(fieldIdx)
@@ -508,11 +516,17 @@ func (field *Field) setupValuerAndSetter(modelType reflect.Type) {
 	case len(field.StructField.Index) == 1 && fieldIndex >= 0:
 		field.ReflectValueOf = func(ctx context.Context, v reflect.Value) reflect.Value {
 			v = reflect.Indirect(v)
+			if v.Type() != modelType {
+				return v.FieldByName(field.Name)
+			}
 			return v.Field(fieldIndex)
 		}
 	default:
 		field.ReflectValueOf = func(ctx context.Context, v reflect.Value) reflect.Value {
 			v = reflect.Indirect(v)
+			if v.Type() != modelType {
+				return v.FieldByName(field.Name)
+			}
 			for idx, fieldIdx := range field.StructField.Index {
 				if fieldIdx >= 0 {
 					v = v.Field(fieldIdx)

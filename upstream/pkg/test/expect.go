@@ -1,4 +1,3 @@
-// Package test provides test utilities and assertions.
 package test
 
 import (
