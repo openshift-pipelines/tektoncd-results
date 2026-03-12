@@ -1,4 +1,3 @@
-// Package main provides CLI documentation generation tool.
 package main
 
 import (
