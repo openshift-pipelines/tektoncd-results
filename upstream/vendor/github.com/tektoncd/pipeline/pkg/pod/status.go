@@ -127,13 +127,6 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 
 	complete := areContainersCompleted(ctx, pod) || isPodCompleted(pod)
 
-	// When EnableKubernetesSidecar is true, we need to ensure all init containers
-	// are completed before considering the taskRun complete, in addition to the regular containers.
-	// This is because sidecars in Kubernetes can keep running after the main containers complete.
-	if config.FromContextOrDefaults(ctx).FeatureFlags.EnableKubernetesSidecar {
-		complete = complete && areInitContainersCompleted(ctx, pod)
-	}
-
 	if complete {
 		onError, ok := tr.Annotations[v1.PipelineTaskOnErrorAnnotation]
 		if ok {
@@ -164,7 +157,6 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 	}
 
 	err := setTaskRunStatusBasedOnStepStatus(ctx, logger, stepStatuses, &tr, pod.Status.Phase, kubeclient, ts)
-
 	setTaskRunStatusBasedOnSidecarStatus(sidecarStatuses, trs)
 
 	trs.Results = removeDuplicateResults(trs.Results)
@@ -268,15 +260,8 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 		}
 	}
 
-	// Build a lookup map for step state provenances.
-	stepStateProvenances := make(map[string]*v1.Provenance)
-	for _, ss := range trs.Steps {
-		stepStateProvenances[ss.Name] = ss.Provenance
-	}
-
 	// Continue with extraction of termination messages
-	orderedStepStates := make([]v1.StepState, len(stepStatuses))
-	for i, s := range stepStatuses {
+	for _, s := range stepStatuses {
 		// Avoid changing the original value by modifying the pointer value.
 		state := s.State.DeepCopy()
 		taskRunStepResults := []v1.TaskRunStepResult{}
@@ -385,13 +370,18 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 			Inputs:            sas.Inputs,
 			Outputs:           sas.Outputs,
 		}
-		if stepStateProvenance, exist := stepStateProvenances[stepState.Name]; exist {
-			stepState.Provenance = stepStateProvenance
+		foundStep := false
+		for i, ss := range trs.Steps {
+			if ss.Name == stepState.Name {
+				stepState.Provenance = ss.Provenance
+				trs.Steps[i] = stepState
+				foundStep = true
+				break
+			}
 		}
-		orderedStepStates[i] = stepState
-	}
-	if len(orderedStepStates) > 0 {
-		trs.Steps = orderedStepStates
+		if !foundStep {
+			trs.Steps = append(trs.Steps, stepState)
+		}
 	}
 
 	return errors.Join(errs...)
@@ -709,21 +699,6 @@ func isMatchingAnyFilter(name string, filters []containerNameFilter) bool {
 	return false
 }
 
-// areInitContainersCompleted returns true if all init containers in the pod are completed.
-func areInitContainersCompleted(ctx context.Context, pod *corev1.Pod) bool {
-	if len(pod.Status.InitContainerStatuses) == 0 ||
-		!(pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded) {
-		return false
-	}
-	for _, containerStatus := range pod.Status.InitContainerStatuses {
-		if containerStatus.State.Terminated == nil {
-			// if any init container is not completed, return false
-			return false
-		}
-	}
-	return true
-}
-
 // areContainersCompleted returns true if all related containers in the pod are completed.
 func areContainersCompleted(ctx context.Context, pod *corev1.Pod) bool {
 	nameFilters := []containerNameFilter{IsContainerStep}
@@ -827,43 +802,28 @@ func IsPodExceedingNodeResources(pod *corev1.Pod) bool {
 	return false
 }
 
-// hasContainerWaitingReason checks if any container (init or regular) is waiting with a reason
-// that matches the provided predicate function
-func hasContainerWaitingReason(pod *corev1.Pod, predicate func(corev1.ContainerStateWaiting) bool) bool {
-	// Check init containers first
-	for _, containerStatus := range pod.Status.InitContainerStatuses {
-		if containerStatus.State.Waiting != nil && predicate(*containerStatus.State.Waiting) {
-			return true
-		}
-	}
-	// Check regular containers
+// isPodHitConfigError returns true if the Pod's status undicates there are config error raised
+func isPodHitConfigError(pod *corev1.Pod) bool {
 	for _, containerStatus := range pod.Status.ContainerStatuses {
-		if containerStatus.State.Waiting != nil && predicate(*containerStatus.State.Waiting) {
+		if containerStatus.State.Waiting != nil && containerStatus.State.Waiting.Reason == ReasonCreateContainerConfigError {
+			// for subPath directory creation errors, we want to allow recovery
+			if strings.Contains(containerStatus.State.Waiting.Message, "failed to create subPath directory") {
+				return false
+			}
 			return true
 		}
 	}
 	return false
 }
 
-// isPodHitConfigError returns true if the Pod's status indicates there are config error raised
-func isPodHitConfigError(pod *corev1.Pod) bool {
-	return hasContainerWaitingReason(pod, func(waiting corev1.ContainerStateWaiting) bool {
-		if waiting.Reason != ReasonCreateContainerConfigError {
-			return false
-		}
-		// for subPath directory creation errors, we want to allow recovery
-		if strings.Contains(waiting.Message, "failed to create subPath directory") {
-			return false
-		}
-		return true
-	})
-}
-
 // isPullImageError returns true if the Pod's status indicates there are any error when pulling image
 func isPullImageError(pod *corev1.Pod) bool {
-	return hasContainerWaitingReason(pod, func(waiting corev1.ContainerStateWaiting) bool {
-		return isImageErrorReason(waiting.Reason)
-	})
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.State.Waiting != nil && isImageErrorReason(containerStatus.State.Waiting.Reason) {
+			return true
+		}
+	}
+	return false
 }
 
 func isImageErrorReason(reason string) bool {
