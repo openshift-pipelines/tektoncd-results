@@ -104,7 +104,7 @@ func (c *Client) Put(ctx context.Context, o Object, opts ...grpc.CallOption) (*p
 // one, or updates the existing Result with new Object details if necessary.
 func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOption) (*pb.Result, error) {
 	resName := resultName(o)
-	curr, err := c.ResultsClient.GetResult(ctx, &pb.GetResultRequest{Name: resName}, opts...)
+	curr, err := c.GetResult(ctx, &pb.GetResultRequest{Name: resName}, opts...)
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, status.Errorf(status.Code(err), "GetResult(%s): %v", resName, err)
 	}
@@ -163,7 +163,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 			res.Summary.Annotations = annotations
 		}
 		// Set the Result.Summary.Labels fields if the object in question contains the required labels.
-		summaryLabels := strings.Split(c.Config.SummaryLabels, ",")
+		summaryLabels := strings.Split(c.SummaryLabels, ",")
 		if len(summaryLabels) > 0 && summaryLabels[0] != "" {
 			for _, v := range summaryLabels {
 				if value, found := o.GetLabels()[v]; found {
@@ -171,7 +171,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 				}
 			}
 		}
-		summaryAnnotations := strings.Split(c.Config.SummaryAnnotations, ",")
+		summaryAnnotations := strings.Split(c.SummaryAnnotations, ",")
 		if len(summaryAnnotations) > 0 && summaryAnnotations[0] != "" {
 			for _, v := range summaryAnnotations {
 				if value, found := o.GetLabels()[v]; found {
@@ -190,7 +190,17 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 			Parent: parentName(o),
 			Result: res,
 		}
-		return c.ResultsClient.CreateResult(ctx, req, opts...)
+		created, err := c.CreateResult(ctx, req, opts...)
+		if err != nil {
+			if status.Code(err) == codes.AlreadyExists {
+				logger.Debug("Result was created concurrently - refetching")
+				return c.GetResult(ctx, &pb.GetResultRequest{
+					Name: resName,
+				}, opts...)
+			}
+			return nil, err
+		}
+		return created, nil
 	}
 
 	// From here on, we're checking to see if there are any updates that need
@@ -214,7 +224,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 		Name:   resName,
 		Result: res,
 	}
-	return c.ResultsClient.UpdateResult(ctx, req, opts...)
+	return c.UpdateResult(ctx, req, opts...)
 }
 
 // parseAnnotations attempts to return the provided value as a map of strings.
