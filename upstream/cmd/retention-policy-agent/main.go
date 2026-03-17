@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main provides the entry point for the retention policy agent.
 package main
 
 import (
@@ -25,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tektoncd/results/pkg/api/server/config"
+	_ "github.com/tektoncd/results/pkg/api/server/db/errors/postgres"
 	"github.com/tektoncd/results/pkg/api/server/logger"
 	"github.com/tektoncd/results/pkg/retention"
 
