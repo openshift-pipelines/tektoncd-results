@@ -1,4 +1,3 @@
-// Package client provides gRPC client utilities for the dev CLI.
 package client
 
 import (
@@ -187,13 +186,11 @@ func (f *Factory) certs() (*x509.CertPool, error) {
 		return nil, err
 	}
 	if path := f.cfg.SSL.RootsFilePath; path != "" {
-		f, err := os.Open(path) //nolint:gosec // Path is from user-controlled configuration
+		f, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			_ = f.Close()
-		}()
+		defer f.Close()
 		b, err := io.ReadAll(f)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read TLS cert file: %v", err)

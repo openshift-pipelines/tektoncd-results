@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package taskrun provides the TaskRun reconciler controller.
 package taskrun
 
 import (
 	"context"
 
-	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/taskrun"
 	"github.com/tektoncd/results/pkg/apis/config"
-	"github.com/tektoncd/results/pkg/metrics"
 	"github.com/tektoncd/results/pkg/taskrunmetrics"
 	"github.com/tektoncd/results/pkg/watcher/logs"
-	"github.com/tektoncd/results/pkg/watcher/reconciler"
-	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"knative.dev/pkg/configmap"
-	"knative.dev/pkg/controller"
-	"knative.dev/pkg/logging"
 
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
 	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
+	taskrunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/taskrun"
+	"github.com/tektoncd/results/pkg/watcher/reconciler"
+	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
+	"knative.dev/pkg/controller"
+	"knative.dev/pkg/logging"
 )
 
 // NewController creates a Controller for watching TaskRuns.
@@ -44,26 +42,23 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 	informer := taskruninformer.Get(ctx)
 	lister := informer.Lister()
 	logger := logging.FromContext(ctx)
-	configStore := config.NewStore(logger.Named("config-store"),
-		metrics.OnStore(logger),
-		taskrunmetrics.MetricsOnStore(logger))
+	configStore := config.NewStore(logger.Named("config-store"), taskrunmetrics.MetricsOnStore(logger))
 	configStore.WatchConfigs(cmw)
 
 	c := &Reconciler{
 		kubeClientSet:  kubeclient.Get(ctx),
 		resultsClient:  resultsClient,
 		logsClient:     logs.Get(ctx),
-		taskRunLister:  lister,
+		lister:         lister,
 		pipelineClient: pipelineclient.Get(ctx),
 		cfg:            cfg,
 		configStore:    configStore,
-		metrics:        metrics.NewRecorder(),
-		taskRunMetrics: taskrunmetrics.NewRecorder(),
+		metrics:        taskrunmetrics.NewRecorder(),
 	}
 
 	impl := taskrunreconciler.NewImpl(ctx, c, func(_ *controller.Impl) controller.Options {
 		return controller.Options{
-			// This results taskrun reconciler shouldn't mutate the taskrun's status.
+			// This results pipelinerun reconciler shouldn't mutate the pipelinerun's status.
 			SkipStatusUpdates: true,
 			ConfigStore:       configStore,
 			FinalizerName:     "results.tekton.dev/taskrun",
