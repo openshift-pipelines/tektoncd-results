@@ -1,4 +1,3 @@
-// Package config provides CLI commands for managing Results configuration.
 package config
 
 import (

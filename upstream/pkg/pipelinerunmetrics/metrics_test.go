@@ -21,9 +21,9 @@ import (
 
 var (
 	nowTime        = metav1.Now()
-	completionTime = metav1.NewTime(nowTime.Add(-time.Minute))
-	failedTime     = metav1.NewTime(nowTime.Add(-time.Second * 30))
-	startTime      = metav1.NewTime(nowTime.Add(-time.Minute * 2))
+	completionTime = metav1.NewTime(nowTime.Time.Add(-time.Minute))
+	failedTime     = metav1.NewTime(nowTime.Time.Add(-time.Second * 30))
+	startTime      = metav1.NewTime(nowTime.Time.Add(-time.Minute * 2))
 )
 
 func TestRecorder_DurationAndCountDeleted(t *testing.T) {
@@ -151,8 +151,8 @@ func TestRecorder_DurationAndCountDeleted(t *testing.T) {
 			}
 
 			logger := logtesting.TestLogger(t)
-			unregisterView(logger)
-			_ = registerView(logger, cfg)
+			viewUnregister(logger)
+			_ = viewRegister(logger, cfg)
 
 			if err := r.DurationAndCountDeleted(context.Background(), cfg, tt.pr); (err != nil) != tt.wantErr {
 				t.Errorf("DurationAndCountDeleted() error = %v, wantErr %v", err, tt.wantErr)
