@@ -1,4 +1,3 @@
-// Package results provides the Results client for the watcher.
 package results
 
 import (
