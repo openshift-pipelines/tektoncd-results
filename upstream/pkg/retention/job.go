@@ -62,16 +62,6 @@ func (a *Agent) job() {
 }
 
 func (a *Agent) cleanupResults(caseStatement, recordType string) {
-	var additionalFilter string
-	if recordType == "tekton.dev/v1.TaskRun" {
-		additionalFilter = `AND NOT EXISTS (
-			SELECT 1 FROM records pr
-			WHERE pr.type = 'tekton.dev/v1.PipelineRun'
-			  AND pr.parent = r.parent
-			  AND pr.result_id = r.result_id
-		)`
-	}
-
 	deleteQuery := fmt.Sprintf(`
         DELETE FROM results
         WHERE id IN (
@@ -81,11 +71,11 @@ func (a *Agent) cleanupResults(caseStatement, recordType string) {
                     r.updated_time,
                     %s AS expiration_time
                 FROM records r
-                WHERE r.type = '%s' %s
+                WHERE r.type = '%s'
             ) AS subquery
             WHERE updated_time < expiration_time
         )
-    `, caseStatement, recordType, additionalFilter)
+    `, caseStatement, recordType)
 
 	if err := errors.Wrap(a.db.Exec(deleteQuery).Error); err != nil {
 		a.Logger.Errorf("failed to delete results for record type %s: %s", recordType, err.Error())
