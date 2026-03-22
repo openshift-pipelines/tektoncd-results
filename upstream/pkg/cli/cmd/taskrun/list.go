@@ -20,6 +20,7 @@ import (
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/results/pkg/cli/client/records"
 	"github.com/tektoncd/results/pkg/cli/common"
+	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 )
 
@@ -88,7 +89,11 @@ List TaskRuns for a specific PipelineRun:
 				return errors.New("cannot use --all-namespaces/-A and --namespace/-n together")
 			}
 			// Initialize the client using the shared prerun function
-			opts.Client = p.RESTClient()
+			var err error
+			opts.Client, err = prerun.InitClient(p, cmd)
+			if err != nil {
+				return err
+			}
 
 			if opts.Limit < 5 || opts.Limit > 1000 {
 				return errors.New("limit should be between 5 and 1000")

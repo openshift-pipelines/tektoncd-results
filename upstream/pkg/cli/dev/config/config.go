@@ -1,4 +1,3 @@
-// Package config provides configuration management for the dev CLI.
 package config
 
 import (
