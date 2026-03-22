@@ -1,4 +1,3 @@
-// Package prerun provides shared pre-run functions for CLI commands.
 package prerun
 
 import (
