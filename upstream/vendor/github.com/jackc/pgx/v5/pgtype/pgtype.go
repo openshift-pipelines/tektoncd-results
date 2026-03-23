@@ -1135,18 +1135,10 @@ func (m *Map) planScan(oid uint32, formatCode int16, target any, depth int) Scan
 		}
 	}
 
-	if _, ok := target.(*any); ok {
-		var codec Codec
-		if dt != nil {
-			codec = dt.Codec
-		} else {
-			if formatCode == TextFormatCode {
-				codec = TextCodec{}
-			} else {
-				codec = ByteaCodec{}
-			}
+	if dt != nil {
+		if _, ok := target.(*any); ok {
+			return &pointerEmptyInterfaceScanPlan{codec: dt.Codec, m: m, oid: oid, formatCode: formatCode}
 		}
-		return &pointerEmptyInterfaceScanPlan{codec: codec, m: m, oid: oid, formatCode: formatCode}
 	}
 
 	return &scanPlanFail{m: m, oid: oid, formatCode: formatCode}
@@ -2007,7 +1999,7 @@ func (w *sqlScannerWrapper) Scan(src any) error {
 		case []byte:
 			bufSrc = src
 		default:
-			bufSrc = fmt.Append(nil, bufSrc)
+			bufSrc = []byte(fmt.Sprint(bufSrc))
 		}
 	}
 
@@ -2018,7 +2010,7 @@ var valuerReflectType = reflect.TypeFor[driver.Valuer]()
 
 // isNilDriverValuer returns true if value is any type of nil unless it implements driver.Valuer. *T is not considered to implement
 // driver.Valuer if it is only implemented by T.
-func isNilDriverValuer(value any) (isNil, callNilDriverValuer bool) {
+func isNilDriverValuer(value any) (isNil bool, callNilDriverValuer bool) {
 	if value == nil {
 		return true, false
 	}
