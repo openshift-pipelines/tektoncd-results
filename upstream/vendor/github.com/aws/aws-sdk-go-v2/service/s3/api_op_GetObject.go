@@ -153,10 +153,6 @@ import (
 //
 // [GetObjectAcl]
 //
-// You must URL encode any signed header values that contain spaces. For example,
-// if your header value is my file.txt , containing two spaces after my , you must
-// URL encode this value to my%20%20file.txt .
-//
 // [Concepts for directory buckets in Local Zones]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-lzs-for-directory-buckets.html
 // [RestoreObject]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_RestoreObject.html
 // [Protecting data with server-side encryption]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-serv-side-encryption.html
@@ -454,8 +450,8 @@ type GetObjectOutput struct {
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
 	ChecksumCRC32 *string
 
-	// The Base64 encoded, 32-bit CRC32C checksum of the object. This checksum is only
-	// present if the checksum was uploaded with the object. For more information, see [Checking object integrity]
+	// The Base64 encoded, 32-bit CRC32C checksum of the object. This will only be
+	// present if the object was uploaded with the object. For more information, see [Checking object integrity]
 	// in the Amazon S3 User Guide.
 	//
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
@@ -467,15 +463,15 @@ type GetObjectOutput struct {
 	// [Checking object integrity in the Amazon S3 User Guide]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
 	ChecksumCRC64NVME *string
 
-	// The Base64 encoded, 160-bit SHA1 digest of the object. This checksum is only
-	// present if the checksum was uploaded with the object. For more information, see [Checking object integrity]
+	// The Base64 encoded, 160-bit SHA1 digest of the object. This will only be
+	// present if the object was uploaded with the object. For more information, see [Checking object integrity]
 	// in the Amazon S3 User Guide.
 	//
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
 	ChecksumSHA1 *string
 
-	// The Base64 encoded, 256-bit SHA256 digest of the object. This checksum is only
-	// present if the checksum was uploaded with the object. For more information, see [Checking object integrity]
+	// The Base64 encoded, 256-bit SHA256 digest of the object. This will only be
+	// present if the object was uploaded with the object. For more information, see [Checking object integrity]
 	// in the Amazon S3 User Guide.
 	//
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
@@ -784,13 +780,16 @@ func (c *Client) addOperationGetObjectMiddlewares(stack *middleware.Stack, optio
 	if err = addSerializeImmutableHostnameBucketMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
 		return err
 	}
-	if err = addInterceptAttempt(stack, options); err != nil {
+	if err = addSpanInitializeEnd(stack); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil
