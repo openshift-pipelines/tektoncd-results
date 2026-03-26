@@ -1,4 +1,3 @@
-// Package pipelinerun provides CLI commands for PipelineRun resources.
 package pipelinerun
 
 import (
@@ -18,6 +17,7 @@ import (
 	"github.com/tektoncd/cli/pkg/formatted"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/results/pkg/cli/common"
+	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 
 	"k8s.io/cli-runtime/pkg/printers"
@@ -147,9 +147,13 @@ Describe a PipelineRun as json:
 			}
 			return nil
 		},
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
-			opts.Client = p.RESTClient()
+			var err error
+			opts.Client, err = prerun.InitClient(p, cmd)
+			if err != nil {
+				return err
+			}
 			if len(args) > 0 {
 				opts.ResourceName = args[0]
 			}
