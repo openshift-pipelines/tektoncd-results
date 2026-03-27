@@ -73,7 +73,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand/v2"
+	"math/rand"
 	"reflect"
 	"slices"
 	"strconv"
@@ -123,22 +123,6 @@ func init() {
 
 // OptionOpenDB options for configuring the driver when opening a new db pool.
 type OptionOpenDB func(*connector)
-
-// ShouldPingParams are passed to OptionShouldPing to decide whether to ping before reusing a connection.
-type ShouldPingParams struct {
-	// Conn is the underlying pgx connection.
-	Conn *pgx.Conn
-	// IdleDuration is how long it has been since ResetSession last ran.
-	IdleDuration time.Duration
-}
-
-// OptionShouldPing controls whether stdlib should issue a liveness ping before reusing a connection.
-// If the function returns true, stdlib will ping.
-// If it returns false, stdlib will skip the ping.
-// If not provided, default is ping only when IdleDuration > 1s.
-func OptionShouldPing(f func(context.Context, ShouldPingParams) bool) OptionOpenDB {
-	return func(dc *connector) { dc.ShouldPing = f }
-}
 
 // OptionBeforeConnect provides a callback for before connect. It is passed a shallow copy of the ConnConfig that will
 // be used to connect, so only its immediate members should be modified. Used only if db is opened with *pgx.ConnConfig.
@@ -247,7 +231,6 @@ type connector struct {
 	BeforeConnect func(context.Context, *pgx.ConnConfig) error // function to call before creation of every new connection
 	AfterConnect  func(context.Context, *pgx.Conn) error       // function to call after creation of every new connection
 	ResetSession  func(context.Context, *pgx.Conn) error       // function is called before a connection is reused
-	ShouldPing    func(context.Context, ShouldPingParams) bool // function to decide if stdlib should ping before reusing a connection
 	driver        *Driver
 }
 
@@ -299,7 +282,6 @@ func (c connector) Connect(ctx context.Context) (driver.Conn, error) {
 		driver:           c.driver,
 		connConfig:       connConfig,
 		resetSessionFunc: c.ResetSession,
-		shouldPing:       c.ShouldPing,
 		psRefCounts:      make(map[*pgconn.StatementDescription]int),
 	}, nil
 }
@@ -407,8 +389,7 @@ type Conn struct {
 	close                func(context.Context) error
 	driver               *Driver
 	connConfig           pgx.ConnConfig
-	resetSessionFunc     func(context.Context, *pgx.Conn) error       // Function is called before a connection is reused
-	shouldPing           func(context.Context, ShouldPingParams) bool // Function to decide if stdlib should ping before reusing a connection
+	resetSessionFunc     func(context.Context, *pgx.Conn) error // Function is called before a connection is reused
 	lastResetSessionTime time.Time
 
 	// psRefCounts contains reference counts for prepared statements. Prepare uses the underlying pgx logic to generate
@@ -490,8 +471,7 @@ func (c *Conn) ExecContext(ctx context.Context, query string, argsV []driver.Nam
 		return nil, driver.ErrBadConn
 	}
 
-	args := make([]any, len(argsV))
-	convertNamedArguments(args, argsV)
+	args := namedValueToInterface(argsV)
 
 	commandTag, err := c.conn.Exec(ctx, query, args...)
 	// if we got a network error before we had a chance to send the query, retry
@@ -508,9 +488,8 @@ func (c *Conn) QueryContext(ctx context.Context, query string, argsV []driver.Na
 		return nil, driver.ErrBadConn
 	}
 
-	args := make([]any, 1+len(argsV))
-	args[0] = databaseSQLResultFormats
-	convertNamedArguments(args[1:], argsV)
+	args := []any{databaseSQLResultFormats}
+	args = append(args, namedValueToInterface(argsV)...)
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
@@ -556,23 +535,11 @@ func (c *Conn) ResetSession(ctx context.Context) error {
 	}
 
 	now := time.Now()
-	idle := now.Sub(c.lastResetSessionTime)
-
-	doPing := idle > time.Second // default behavior: ping only if idle > 1s
-
-	if c.shouldPing != nil {
-		doPing = c.shouldPing(ctx, ShouldPingParams{
-			Conn:         c.conn,
-			IdleDuration: idle,
-		})
-	}
-
-	if doPing {
+	if now.Sub(c.lastResetSessionTime) > time.Second {
 		if err := c.conn.PgConn().Ping(ctx); err != nil {
 			return driver.ErrBadConn
 		}
 	}
-
 	c.lastResetSessionTime = now
 
 	return c.resetSessionFunc(ctx, c.conn)
@@ -664,8 +631,6 @@ func (r *Rows) ColumnTypeLength(index int) (int64, bool) {
 		return math.MaxInt64, true
 	case pgtype.VarcharOID, pgtype.BPCharArrayOID:
 		return int64(fd.TypeModifier - varHeaderSize), true
-	case pgtype.VarbitOID:
-		return int64(fd.TypeModifier), true
 	default:
 		return 0, false
 	}
@@ -883,14 +848,28 @@ func (r *Rows) Next(dest []driver.Value) error {
 	return nil
 }
 
-func convertNamedArguments(args []any, argsV []driver.NamedValue) {
-	for i, v := range argsV {
-		if v.Value != nil {
-			args[i] = v.Value.(any)
+func valueToInterface(argsV []driver.Value) []any {
+	args := make([]any, 0, len(argsV))
+	for _, v := range argsV {
+		if v != nil {
+			args = append(args, v.(any))
 		} else {
-			args[i] = nil
+			args = append(args, nil)
 		}
 	}
+	return args
+}
+
+func namedValueToInterface(argsV []driver.NamedValue) []any {
+	args := make([]any, 0, len(argsV))
+	for _, v := range argsV {
+		if v.Value != nil {
+			args = append(args, v.Value.(any))
+		} else {
+			args = append(args, nil)
+		}
+	}
+	return args
 }
 
 type wrapTx struct {
