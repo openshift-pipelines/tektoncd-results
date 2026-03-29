@@ -14,7 +14,6 @@ import (
 	"github.com/tektoncd/results/pkg/cli/client/logs"
 	"github.com/tektoncd/results/pkg/cli/client/records"
 	"github.com/tektoncd/results/pkg/cli/common"
-	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 )
 
@@ -58,13 +57,9 @@ Logs are only available for completed PipelineRuns. Running PipelineRuns do not 
 			}
 			return nil
 		},
-		PreRunE: func(cmd *cobra.Command, args []string) error {
+		PreRunE: func(_ *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
-			var err error
-			opts.Client, err = prerun.InitClient(p, cmd)
-			if err != nil {
-				return err
-			}
+			opts.Client = p.RESTClient()
 			if len(args) > 0 {
 				opts.ResourceName = args[0]
 			}
@@ -140,7 +135,10 @@ Logs are only available for completed PipelineRuns. Running PipelineRuns do not 
 
 			// Close the reader if it implements io.Closer
 			if closer, ok := reader.(io.Closer); ok {
-				defer closer.Close()
+				// Workaround for golangci-lint returned value not checked complaint
+				defer func() {
+					_ = closer.Close()
+				}()
 			}
 
 			// Copy the logs to stdout
