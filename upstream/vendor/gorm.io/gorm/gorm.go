@@ -23,7 +23,6 @@ type Config struct {
 	// You can disable it by setting `SkipDefaultTransaction` to true
 	SkipDefaultTransaction    bool
 	DefaultTransactionTimeout time.Duration
-	DefaultContextTimeout     time.Duration
 
 	// NamingStrategy tables, columns naming strategy
 	NamingStrategy schema.Namer
