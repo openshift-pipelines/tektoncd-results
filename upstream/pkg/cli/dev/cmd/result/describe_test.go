@@ -4,8 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tektoncd/results/pkg/cli/testutils"
-
 	"github.com/tektoncd/results/pkg/cli/dev/flags"
 
 	"github.com/jonboulle/clockwork"
@@ -48,7 +46,7 @@ func TestDescribeResult(t *testing.T) {
 	}
 	cmd := Command(param)
 
-	output, err := testutils.ExecuteCommand(cmd, "describe", "default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7")
+	output, err := test.ExecuteCommand(cmd, "describe", "default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7")
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
