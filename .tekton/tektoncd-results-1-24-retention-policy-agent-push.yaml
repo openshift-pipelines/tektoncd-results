@@ -10,16 +10,16 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "next" &&
+      == "release-v1.24.x" &&
       ("upstream/***".pathChanged() || ".konflux/patches/***".pathChanged() || ".konflux/rpms/***".pathChanged() ||
-      ".konflux/dockerfiles/api.Dockerfile".pathChanged() ||
-      ".tekton/tektoncd-results-next-api-push.yaml".pathChanged())
+      ".konflux/dockerfiles/retention-policy-agent.Dockerfile".pathChanged() ||
+      ".tekton/tektoncd-results-1-24-retention-policy-agent-push.yaml".pathChanged())
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: openshift-pipelines-core-next
-    appstudio.openshift.io/component: tektoncd-results-next-api
+    appstudio.openshift.io/application: openshift-pipelines-core-1-24
+    appstudio.openshift.io/component: tektoncd-results-1-24-retention-policy-agent
     pipelines.appstudio.openshift.io/type: build
-  name: tektoncd-results-next-api-on-push
+  name: tektoncd-results-1-24-retention-policy-agent-on-push
   namespace: tekton-ecosystem-tenant
 spec:
   params:
@@ -30,19 +30,19 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/pipelines-results-api-rhel9:{{revision}}
+    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/pipelines-results-retention-policy-agent-rhel9:{{revision}}
   - name: dockerfile
-    value: .konflux/dockerfiles/api.Dockerfile
+    value: .konflux/dockerfiles/retention-policy-agent.Dockerfile
   - name: additional-tags
     value:
-      - "next"
+      - "v1.24.0"
   - name: prefetch-input
     value: |
       {"type": "rpm", "path": ".konflux/rpms"}
   pipelineRef:
     name: docker-build-ta
   taskRunTemplate:
-    serviceAccountName: build-pipeline-tektoncd-results-next-api
+    serviceAccountName: build-pipeline-tektoncd-results-1-24-retention-policy-agent
   workspaces:
   - name: git-auth
     secret:
