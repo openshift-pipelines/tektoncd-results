@@ -48,6 +48,13 @@ jobs:
                   ]
                 },
                 {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "cc: <@UUKJTU5M3> please check and fix."
+                  }
+                },
+                {
                   "type": "actions",
                   "elements": [
                     {
