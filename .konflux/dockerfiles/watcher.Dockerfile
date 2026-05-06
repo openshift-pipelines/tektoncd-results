@@ -27,14 +27,14 @@ COPY --from=builder /tmp/openshift-pipelines-results-watcher ${KO_APP}/watcher
 COPY head ${KO_DATA_PATH}/HEAD
 
 LABEL \
-    com.redhat.component="openshift-pipelines-results-watcher-rhel8-container" \
+    com.redhat.component="openshift-pipelines-results-watcher-rhel9-container" \
     cpe="cpe:/a:redhat:openshift_pipelines:1.15::el9" \
     description="Red Hat OpenShift Pipelines tektoncd-results watcher" \
     io.k8s.description="Red Hat OpenShift Pipelines tektoncd-results watcher" \
     io.k8s.display-name="Red Hat OpenShift Pipelines tektoncd-results watcher" \
     io.openshift.tags="tekton,openshift,tektoncd-results,watcher" \
     maintainer="pipelines-extcomm@redhat.com" \
-    name="openshift-pipelines/pipelines-results-watcher-rhel8" \
+    name="openshift-pipelines/pipelines-results-watcher-rhel9" \
     summary="Red Hat OpenShift Pipelines tektoncd-results watcher" \
     version="v1.15.5"
 

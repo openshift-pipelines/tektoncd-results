@@ -30,7 +30,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/pipelines-results-retention-policy-agent-rhel8:{{revision}}
+    value: quay.io/redhat-user-workloads/tekton-ecosystem-tenant/pipelines-results-retention-policy-agent-rhel9:{{revision}}
   - name: dockerfile
     value: .konflux/dockerfiles/retention-policy-agent.Dockerfile
   - name: additional-tags
