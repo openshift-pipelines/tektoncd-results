@@ -75,7 +75,11 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, tr *pipelinev1.TaskRun) 
 		if !ok {
 			return fmt.Errorf("expected TaskRun, got %T", object)
 		}
-		return r.taskRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, tr)
+		if err := r.taskRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, tr); err != nil {
+			// Log but don't fail reconciliation for metrics issues
+			logging.FromContext(ctx).Warnf("Failed to record taskrun deletion metrics: %v", err)
+		}
+		return nil
 	}
 	dyn.AfterStorage = func(ctx context.Context, o results.Object, _ bool) error {
 		tr, ok := o.(*pipelinev1.TaskRun)
@@ -94,6 +98,11 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, tr *pipelinev1.TaskRun) 
 func (r *Reconciler) FinalizeKind(ctx context.Context, tr *pipelinev1.TaskRun) knativereconciler.Event {
 	// Reconcile the taskrun to ensure that it is stored in the database
 	rerr := r.ReconcileKind(ctx, tr)
+	if rerr != nil {
+		// Keep requeue semantics in finalize() while ensuring this reconcile error is always visible.
+		logging.FromContext(ctx).Warnw("reconcile during taskrun finalization returned error",
+			zap.Error(rerr))
+	}
 
 	return r.finalize(ctx, tr, rerr)
 }
@@ -170,7 +179,10 @@ func (r *Reconciler) finalize(ctx context.Context, tr *pipelinev1.TaskRun, rerr 
 			tr.Namespace, tr.Name, now.String(), storeDeadline.String())
 		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
-	if rerr != nil || stored != "true" {
+	if rerr != nil {
+		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+	}
+	if stored != "true" {
 		logging.FromContext(ctx).Debugf("stored annotation is not true on taskrun %s/%s, now: %s, storeDeadline: %s",
 			tr.Namespace, tr.Name, now.String(), storeDeadline.String())
 		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
