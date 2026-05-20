@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           failed=$(gh api "/repos/${{ github.repository }}/check-suites/${{ github.event.check_suite.id }}/check-runs" \
-            --jq '[.check_runs[] | select(.conclusion == "failure") | .name] | join(", ")')
+            --jq '[.check_runs[] | select(.conclusion == "failure") | .name | split(" / ") | last] | join(", ")')
           echo "names=${failed:-unknown}" >> "$GITHUB_OUTPUT"
 
       - name: Send Slack notification
