@@ -3,12 +3,13 @@ package config
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"knative.dev/pkg/metrics"
+	"knative.dev/pkg/observability/configmap"
 )
 
 const (
 	// metricsTaskrunLevel determines to what level to aggregate metrics
-	// for taskrun
+	// for taskrun and customrun (both are task-level resources and share
+	// this configuration knob for brevity)
 	metricsTaskrunLevelKey = "metrics.taskrun.level"
 
 	// metricsPipelinerunLevel determines to what level to aggregate metrics
@@ -83,7 +84,7 @@ func (cfg *Metrics) DeepCopy() *Metrics {
 // GetMetricsConfigName returns the name of the configmap containing all
 // customizations for the storage bucket.
 func GetMetricsConfigName() string {
-	return metrics.ConfigMapName()
+	return configmap.Name()
 }
 
 // Equals returns true if two Configs are identical
