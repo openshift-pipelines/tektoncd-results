@@ -32,6 +32,7 @@ import (
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
 	pipelineruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/pipelinerun"
 	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
+	customruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1beta1/customrun"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 )
 
@@ -45,22 +46,28 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 	pipelineRunInformer := pipelineruninformer.Get(ctx)
 	pipelineRunLister := pipelineRunInformer.Lister()
 	logger := logging.FromContext(ctx)
-	configStore := config.NewStore(logger.Named("config-store"),
-		metrics.OnStore(logger),
-		pipelinerunmetrics.MetricsOnStore(logger))
+	configStore := config.NewStore(logger.Named("config-store"))
 	configStore.WatchConfigs(cmw)
+
+	// Initialize metrics once at startup
+	metrics.EnsureMetricsInitialized(logger)
+	pipelineRunMetrics, err := pipelinerunmetrics.NewRecorder(ctx)
+	if err != nil {
+		logger.Errorf("Failed to create pipelinerun metrics recorder: %v. Metrics will not be recorded.", err)
+	}
 
 	c := &Reconciler{
 		kubeClientSet:      kubeclient.Get(ctx),
 		resultsClient:      resultsClient,
 		logsClient:         logs.Get(ctx),
 		pipelineRunLister:  pipelineRunLister,
+		customRunLister:    customruninformer.Get(ctx).Lister(),
 		taskRunLister:      taskruninformer.Get(ctx).Lister(),
 		pipelineClient:     pipelineclient.Get(ctx),
 		cfg:                cfg,
 		configStore:        configStore,
 		metrics:            metrics.NewRecorder(),
-		pipelineRunMetrics: pipelinerunmetrics.NewRecorder(),
+		pipelineRunMetrics: pipelineRunMetrics,
 	}
 
 	impl := pipelinerunreconciler.NewImpl(ctx, c, func(_ *controller.Impl) controller.Options {
@@ -72,7 +79,7 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 		}
 	})
 
-	_, err := pipelineRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+	_, err = pipelineRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
 	if err != nil {
 		logger.Panicf("Couldn't register PipelineRun informer event handler: %w", err)
 	}
