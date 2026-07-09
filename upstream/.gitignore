@@ -1,0 +1,12 @@
+# IDE
+.vscode
+.idea
+.bin
+
+# Testing
+temp
+bin
+results.db
+
+# Binary
+tkn-results
