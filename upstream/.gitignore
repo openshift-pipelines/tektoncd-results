@@ -1,0 +1,18 @@
+# IDE
+.vscode
+.idea
+.bin
+
+# Testing
+temp
+bin
+results.db
+
+# Binary
+tkn-results
+# Coverage and swap files
+*.swo
+*.swp
+.DS_Store
+cover.out
+coverage.txt
