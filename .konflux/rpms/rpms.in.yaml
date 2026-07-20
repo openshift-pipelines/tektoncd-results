@@ -1,9 +1,8 @@
 contentOrigin:
   repofiles:
     - ./ubi.repo
-packages: [shadow-utils]
+packages: []
 arches:
-  # The list of architectures
   - aarch64
   - x86_64
   - ppc64le
