@@ -30,6 +30,7 @@ import (
 	tknlog "github.com/tektoncd/cli/pkg/log"
 	tknopts "github.com/tektoncd/cli/pkg/options"
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	pipelinev1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/log"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/record"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/result"
@@ -139,6 +140,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	if o.GetObjectKind().GroupVersionKind().Empty() {
 		gvk, err := convert.InferGVK(o)
 		if err != nil {
+			logger.Warnw("Failed to infer group version kind", zap.Error(err))
 			if ctxCancel != nil {
 				ctxCancel()
 			}
@@ -154,7 +156,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	timeTakenField := zap.Int64("results.tekton.dev/time-taken-ms", time.Since(startTime).Milliseconds())
 
 	if err != nil {
-		logger.Debugw("Error upserting record to API server", zap.Error(err), timeTakenField)
+		logger.Warnw("Failed to upsert record to API server", zap.Error(err), timeTakenField)
 
 		if ctxCancel != nil {
 			ctxCancel()
@@ -217,7 +219,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	// CreateEvents if enabled
 	if r.cfg.StoreEvent {
 		if err := r.storeEvents(ctx, o); err != nil {
-			logger.Errorw("Error storing eventlist", zap.Error(err))
+			logger.Warnw("Failed to store event list", zap.Error(err))
 			if ctxCancel != nil {
 				ctxCancel()
 			}
@@ -232,6 +234,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	recordAnnotation := annotation.Annotation{Name: annotation.Record, Value: rec.GetName()}
 	resultAnnotation := annotation.Annotation{Name: annotation.Result, Value: res.GetName()}
 	if err = r.addResultsAnnotations(ctx, o, recordAnnotation, resultAnnotation); err != nil {
+		logger.Warnw("Failed to add results annotations", zap.Error(err))
 		// no grpc calls from addResultsAnnotation
 		if ctxCancel != nil {
 			ctxCancel()
@@ -240,6 +243,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	}
 
 	if err = r.addChildReadyForDeletionAnnotations(ctx, o); err != nil {
+		logger.Warnw("Failed to add child ready for deletion annotation", zap.Error(err))
 		if ctxCancel != nil {
 			ctxCancel()
 		}
@@ -247,6 +251,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	}
 
 	if err = r.deleteUponCompletion(ctx, o); err != nil {
+		logger.Warnw("Failed during delete upon completion", zap.Error(err))
 		// no grpc calls from deleteUponCompletion
 		if ctxCancel != nil {
 			ctxCancel()
@@ -256,7 +261,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, o results.Object) error {
 	if ctxCancel != nil {
 		defer ctxCancel()
 	}
-	return r.addStoredAnnotations(ctx, o)
+	if err = r.addStoredAnnotations(ctx, o); err != nil {
+		logger.Warnw("Failed to add stored annotation", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // addResultsAnnotations adds Results annotations to the object in question if
@@ -316,6 +325,7 @@ func (r *Reconciler) deleteUponCompletion(ctx context.Context, o results.Object)
 
 	completionTime, err := getCompletionTime(o)
 	if err != nil {
+		logger.Warnw("Failed to get completion time for object", zap.Error(err))
 		return err
 	}
 
@@ -339,6 +349,7 @@ func (r *Reconciler) deleteUponCompletion(ctx context.Context, o results.Object)
 	}
 
 	if isReady, err := r.IsReadyForDeletionFunc(ctx, o); err != nil {
+		logger.Warnw("Failed to check whether object is ready for deletion", zap.Error(err))
 		return err
 	} else if !isReady {
 		return controller.NewRequeueAfter(r.cfg.RequeueInterval)
@@ -350,7 +361,7 @@ func (r *Reconciler) deleteUponCompletion(ctx context.Context, o results.Object)
 	if err := r.objectClient.Delete(ctx, o.GetName(), metav1.DeleteOptions{
 		Preconditions: metav1.NewUIDPreconditions(string(o.GetUID())),
 	}); err != nil && !errors.IsNotFound(err) {
-		logger.Debugw("Error deleting object", zap.Error(err))
+		logger.Warnw("Failed to delete object", zap.Error(err))
 		return fmt.Errorf("error deleting object: %w", err)
 	}
 
@@ -381,6 +392,11 @@ func getCompletionTime(object results.Object) (*time.Time, error) {
 		}
 
 	case *pipelinev1.TaskRun:
+		if o.Status.CompletionTime != nil {
+			completionTime = &o.Status.CompletionTime.Time
+		}
+
+	case *pipelinev1beta1.CustomRun:
 		if o.Status.CompletionTime != nil {
 			completionTime = &o.Status.CompletionTime.Time
 		}
@@ -568,7 +584,7 @@ func (r *Reconciler) storeEvents(ctx context.Context, o results.Object) error {
 	condition := o.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
 	GVK := o.GetObjectKind().GroupVersionKind()
 	if !GVK.Empty() &&
-		(GVK.Kind == "TaskRun" || GVK.Kind == "PipelineRun") &&
+		(GVK.Kind == "TaskRun" || GVK.Kind == "PipelineRun" || GVK.Kind == "CustomRun") &&
 		condition != nil &&
 		!condition.IsUnknown() {
 
@@ -687,6 +703,14 @@ func (r *Reconciler) addStoredAnnotations(ctx context.Context, o results.Object)
 			return fmt.Errorf("failed to cast object to PipelineRun")
 		}
 		if pipelineRun.IsDone() {
+			stored = annotation.Annotation{Name: annotation.Stored, Value: "true"}
+		}
+	case "CustomRun":
+		customRun, ok := o.(*pipelinev1beta1.CustomRun)
+		if !ok {
+			return fmt.Errorf("failed to cast object to CustomRun")
+		}
+		if customRun.IsDone() {
 			stored = annotation.Annotation{Name: annotation.Stored, Value: "true"}
 		}
 	default:

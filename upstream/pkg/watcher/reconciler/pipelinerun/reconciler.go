@@ -15,7 +15,9 @@
 package pipelinerun
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,9 +26,11 @@ import (
 	"github.com/tektoncd/results/pkg/pipelinerunmetrics"
 
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	pipelinev1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
 	pipelinev1listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1"
+	pipelinev1beta1listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1beta1"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
 	resultsannotation "github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/client"
@@ -35,6 +39,8 @@ import (
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"go.uber.org/zap"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
@@ -49,6 +55,7 @@ type Reconciler struct {
 
 	resultsClient      pb.ResultsClient
 	logsClient         pb.LogsClient
+	customRunLister    pipelinev1beta1listers.CustomRunLister
 	pipelineRunLister  pipelinev1listers.PipelineRunLister
 	taskRunLister      pipelinev1listers.TaskRunLister
 	pipelineClient     versioned.Interface
@@ -87,17 +94,21 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, pr *pipelinev1.PipelineR
 	}
 
 	dyn := dynamic.NewDynamicReconciler(r.kubeClientSet, r.resultsClient, r.logsClient, pipelineRunClient, r.cfg)
-	// Tell the dynamic reconciler to wait until all underlying TaskRuns are
-	// ready for deletion before deleting the PipelineRun. This guarantees
+	// Tell the reconciler to wait until all underlying TaskRuns and CustomRuns
+	// are ready for deletion before deleting the PipelineRun. This guarantees
 	// that the TaskRuns will not be deleted before their final state being
 	// properly archived into the API server.
-	dyn.IsReadyForDeletionFunc = r.areAllUnderlyingTaskRunsReadyForDeletion
+	dyn.IsReadyForDeletionFunc = r.areAllChildRunsReadyForDeletion
 	dyn.AfterDeletion = func(ctx context.Context, object results.Object) error {
 		pr, ok := object.(*pipelinev1.PipelineRun)
 		if !ok {
 			return fmt.Errorf("expected PipelineRun, got %T", object)
 		}
-		return r.pipelineRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, pr)
+		if err := r.pipelineRunMetrics.DurationAndCountDeleted(ctx, r.configStore.Load().Metrics, pr); err != nil {
+			// Log but don't fail reconciliation for metrics issues
+			logging.FromContext(ctx).Warnf("Failed to record pipelinerun deletion metrics: %v", err)
+		}
+		return nil
 	}
 	dyn.AfterStorage = func(ctx context.Context, object results.Object, _ bool) error {
 		pr, ok := object.(*pipelinev1.PipelineRun)
@@ -110,7 +121,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, pr *pipelinev1.PipelineR
 	return dyn.Reconcile(logging.WithLogger(ctx, logger), pr)
 }
 
-func (r *Reconciler) areAllUnderlyingTaskRunsReadyForDeletion(ctx context.Context, object results.Object) (bool, error) {
+func (r *Reconciler) areAllChildRunsReadyForDeletion(ctx context.Context, object results.Object) (bool, error) {
 	pipelineRun, ok := object.(*pipelinev1.PipelineRun)
 	if !ok {
 		return false, fmt.Errorf("unexpected object (must not happen): want %T, but got %T", &pipelinev1.PipelineRun{}, object)
@@ -120,20 +131,43 @@ func (r *Reconciler) areAllUnderlyingTaskRunsReadyForDeletion(ctx context.Contex
 
 	if len(pipelineRun.Status.ChildReferences) > 0 {
 		for _, reference := range pipelineRun.Status.ChildReferences {
-			taskRun, err := r.taskRunLister.TaskRuns(pipelineRun.Namespace).Get(reference.Name)
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					// Let's assume that the TaskRun in
-					// question is gone and therefore, we
-					// can safely ignore it.
-					logger.Debugf("TaskRun %s/%s associated with PipelineRun %s is no longer available. Skipping.", pipelineRun.Namespace, reference.Name, pipelineRun.Name)
-					continue
+			switch reference.Kind {
+			// ChildStatusReference.Kind is optional (TypeMeta fields are omitempty).
+			// We are treating missing Kind as a TaskRun. This preserves earlier behavior.
+			case "TaskRun", "":
+				taskRun, err := r.taskRunLister.TaskRuns(pipelineRun.Namespace).Get(reference.Name)
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						// Let's assume that the TaskRun in
+						// question is gone and therefore, we
+						// can safely ignore it.
+						logger.Debugf("TaskRun %s/%s associated with PipelineRun %s is no longer available. Skipping.", pipelineRun.Namespace, reference.Name, pipelineRun.Name)
+						continue
+					}
+					return false, fmt.Errorf("error reading TaskRun from the indexer: %w", err)
 				}
-				return false, fmt.Errorf("error reading TaskRun from the indexer: %w", err)
-			}
-			if !isMarkedAsReadyForDeletion(taskRun) {
-				logger.Debugf("TaskRun %s/%s associated with PipelineRun %s isn't yet ready to be deleted - the annotation %s is missing", taskRun.Namespace, taskRun.Name, pipelineRun.Name, resultsannotation.ChildReadyForDeletion)
-				return false, nil
+				if !isTaskRunMarkedAsReadyForDeletion(taskRun) {
+					logger.Debugf("TaskRun %s/%s associated with PipelineRun %s isn't yet ready to be deleted - the annotation %s is missing", taskRun.Namespace, taskRun.Name, pipelineRun.Name, resultsannotation.ChildReadyForDeletion)
+					return false, nil
+				}
+			case "CustomRun":
+				customRun, err := r.customRunLister.CustomRuns(pipelineRun.Namespace).Get(reference.Name)
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						// Let's assume that the CustomRun in
+						// question is gone and therefore, we
+						// can safely ignore it.
+						logger.Debugf("CustomRun %s/%s associated with PipelineRun %s is no longer available. Skipping.", pipelineRun.Namespace, reference.Name, pipelineRun.Name)
+						continue
+					}
+					return false, fmt.Errorf("error reading CustomRun from the indexer: %w", err)
+				}
+				if !isCustomRunMarkedAsReadyForDeletion(customRun) {
+					logger.Debugf("CustomRun %s/%s associated with PipelineRun %s isn't yet ready to be deleted - the annotation %s is missing", customRun.Namespace, customRun.Name, pipelineRun.Name, resultsannotation.ChildReadyForDeletion)
+					return false, nil
+				}
+			default:
+				logger.Warnf("Unknown child reference kind: %s for %s/%s", reference.Kind, pipelineRun.Namespace, reference.Name)
 			}
 		}
 	}
@@ -141,11 +175,21 @@ func (r *Reconciler) areAllUnderlyingTaskRunsReadyForDeletion(ctx context.Contex
 	return true, nil
 }
 
-func isMarkedAsReadyForDeletion(taskRun *pipelinev1.TaskRun) bool {
+func isTaskRunMarkedAsReadyForDeletion(taskRun *pipelinev1.TaskRun) bool {
 	if taskRun.Annotations == nil {
 		return false
 	}
 	if _, found := taskRun.Annotations[resultsannotation.ChildReadyForDeletion]; found {
+		return true
+	}
+	return false
+}
+
+func isCustomRunMarkedAsReadyForDeletion(customRun *pipelinev1beta1.CustomRun) bool {
+	if customRun.Annotations == nil {
+		return false
+	}
+	if _, found := customRun.Annotations[resultsannotation.ChildReadyForDeletion]; found {
 		return true
 	}
 	return false
@@ -158,11 +202,36 @@ func isMarkedAsReadyForDeletion(taskRun *pipelinev1.TaskRun) bool {
 func (r *Reconciler) FinalizeKind(ctx context.Context, pr *pipelinev1.PipelineRun) knativereconciler.Event {
 	// Reconcile the pipelinerun to ensure that it is stored in the database
 	rerr := r.ReconcileKind(ctx, pr)
+	if rerr != nil {
+		// Keep requeue semantics in finalize() while ensuring this reconcile error is always visible.
+		logging.FromContext(ctx).Warnw("reconcile during pipelinerun finalization returned error",
+			zap.Error(rerr))
+	}
 
 	return r.finalize(ctx, pr, rerr)
 }
 
-func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, rerr error) knativereconciler.Event {
+func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, rerr error) (result knativereconciler.Event) {
+	// MIGRATION: When finalize decides to allow deletion (returns nil), check if the
+	// finalizer was added via merge patch by the old controller version. SSA cannot
+	// remove finalizers it doesn't own, so we remove it via merge patch ourselves.
+	// This can be removed once all pre-SSA resources are deleted.
+	defer func() {
+		if result != nil {
+			return
+		}
+		if !r.isFinalizerOwnedByMergePatch(pr) {
+			return
+		}
+		logging.FromContext(ctx).Infof("Removing merge-patch finalizer on %s/%s for SSA migration",
+			pr.Namespace, pr.Name)
+		if err := r.removeFinalizerViaMergePatch(ctx, pr); err != nil {
+			logging.FromContext(ctx).Warnw("Failed to remove finalizer via merge patch",
+				zap.Error(err))
+			result = controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+		}
+	}()
+
 	// If logsClient isn't nil, it means we have logging storage enabled
 	// and we can't use finalizers to coordinate deletion.
 	if r.logsClient != nil {
@@ -219,11 +288,70 @@ func (r *Reconciler) finalize(ctx context.Context, pr *pipelinev1.PipelineRun, r
 			pr.Namespace, pr.Name, now.String(), storeDeadline.String())
 		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
-	if rerr != nil || stored != "true" {
+	if rerr != nil {
+		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
+	}
+	if stored != "true" {
 		logging.FromContext(ctx).Debugf("stored annotation is not true on pipelinerun %s/%s, now: %s, storeDeadline: %s",
 			pr.Namespace, pr.Name, now.String(), storeDeadline.String())
 		return controller.NewRequeueAfter(r.cfg.FinalizerRequeueInterval)
 	}
 
 	return nil
+}
+
+// isFinalizerOwnedByMergePatch checks if the finalizer was added via merge patch (Update operation).
+// MIGRATION: This is a temporary migration feature to handle the upgrade scenario where
+// in-flight PipelineRuns have finalizers set via merge patch by the old controller version.
+// Kubernetes SSA treats (manager, Update) and (manager, Apply) as different owners, so we need
+// to detect and handle the old ownership pattern.
+// This function can be removed once all resources from the pre-SSA version are deleted.
+func (r *Reconciler) isFinalizerOwnedByMergePatch(pr *pipelinev1.PipelineRun) bool {
+	for _, mf := range pr.ManagedFields {
+		// Check if this is from the old merge patch operation
+		if mf.Operation == metav1.ManagedFieldsOperationUpdate {
+			// Parse FieldsV1 to check if it owns the finalizers field
+			// FieldsV1 is a JSON structure, we need to check if it contains f:metadata.f:finalizers
+			if mf.FieldsV1 != nil && mf.FieldsV1.Raw != nil {
+				// Check if this managed field entry owns finalizers AND specifically our finalizer
+				if bytes.Contains(mf.FieldsV1.Raw, []byte(`"f:finalizers"`)) &&
+					bytes.Contains(mf.FieldsV1.Raw, []byte(`v:\"results.tekton.dev/pipelinerun\"`)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// removeFinalizerViaMergePatch removes the finalizer using merge patch.
+// MIGRATION: This is a temporary migration feature to handle the upgrade scenario where
+// in-flight PipelineRuns have finalizers set via merge patch by the old controller version.
+// This uses merge patch to remove finalizers that cannot be removed via SSA due to different
+// ownership (manager, Update) vs (manager, Apply).
+// This function can be removed once all resources from the pre-SSA version are deleted.
+func (r *Reconciler) removeFinalizerViaMergePatch(ctx context.Context, pr *pipelinev1.PipelineRun) error {
+	// Remove our finalizer from the list
+	var newFinalizers []string
+	for _, f := range pr.Finalizers {
+		if f != "results.tekton.dev/pipelinerun" {
+			newFinalizers = append(newFinalizers, f)
+		}
+	}
+
+	mergePatch := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"finalizers":      newFinalizers,
+			"resourceVersion": pr.ResourceVersion,
+		},
+	}
+
+	patch, err := json.Marshal(mergePatch)
+	if err != nil {
+		return err
+	}
+
+	_, err = r.pipelineClient.TektonV1().PipelineRuns(pr.Namespace).Patch(
+		ctx, pr.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	return err
 }
