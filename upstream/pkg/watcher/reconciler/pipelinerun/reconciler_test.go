@@ -22,12 +22,17 @@ import (
 	"time"
 
 	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
+	pipelinev1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	fakeversioned "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
 	pipelinev1listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1"
+	pipelinev1beta1listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1beta1"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
 	resultsannotation "github.com/tektoncd/results/pkg/watcher/reconciler/annotation"
 	"go.uber.org/zap/zaptest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	apis "knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -118,6 +123,10 @@ func TestAreAllUnderlyingTaskRunsReadyForDeletion(t *testing.T) {
 			Status: pipelinev1.PipelineRunStatus{
 				PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
 					ChildReferences: []pipelinev1.ChildStatusReference{{
+						TypeMeta: runtime.TypeMeta{
+							Kind:       "TaskRun",
+							APIVersion: "tekton.dev/v1",
+						},
 						Name: "foo",
 					},
 					},
@@ -132,9 +141,17 @@ func TestAreAllUnderlyingTaskRunsReadyForDeletion(t *testing.T) {
 				Status: pipelinev1.PipelineRunStatus{
 					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
 						ChildReferences: []pipelinev1.ChildStatusReference{{
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "TaskRun",
+								APIVersion: "tekton.dev/v1",
+							},
 							Name: "foo",
 						},
 							{
+								TypeMeta: runtime.TypeMeta{
+									Kind:       "TaskRun",
+									APIVersion: "tekton.dev/v1",
+								},
 								Name: "bar",
 							},
 						},
@@ -149,9 +166,17 @@ func TestAreAllUnderlyingTaskRunsReadyForDeletion(t *testing.T) {
 				Status: pipelinev1.PipelineRunStatus{
 					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
 						ChildReferences: []pipelinev1.ChildStatusReference{{
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "TaskRun",
+								APIVersion: "tekton.dev/v1",
+							},
 							Name: "foo",
 						},
 							{
+								TypeMeta: runtime.TypeMeta{
+									Kind:       "TaskRun",
+									APIVersion: "tekton.dev/v1",
+								},
 								Name: "baz",
 							},
 						},
@@ -196,7 +221,7 @@ func TestAreAllUnderlyingTaskRunsReadyForDeletion(t *testing.T) {
 
 			ctx := context.Background()
 			ctx = logging.WithLogger(ctx, zaptest.NewLogger(t).Sugar())
-			got, err := reconciler.areAllUnderlyingTaskRunsReadyForDeletion(ctx, test.in)
+			got, err := reconciler.areAllChildRunsReadyForDeletion(ctx, test.in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,6 +231,14 @@ func TestAreAllUnderlyingTaskRunsReadyForDeletion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mergePatchFinalizerManagedFields(finalizerName string) []metav1.ManagedFieldsEntry {
+	raw := fmt.Sprintf(`{"f:metadata":{"f:finalizers":{".":{},"v:\"%s\"":{}}}}`, finalizerName)
+	return []metav1.ManagedFieldsEntry{{
+		Operation: metav1.ManagedFieldsOperationUpdate,
+		FieldsV1:  &metav1.FieldsV1{Raw: []byte(raw)},
+	}}
 }
 
 func TestFinalize(t *testing.T) {
@@ -222,6 +255,7 @@ func TestFinalize(t *testing.T) {
 		pr             *pipelinev1.PipelineRun
 		cfg            *reconciler.Config
 		reconcileError knativereconciler.Event
+		patchErr       error
 		want           knativereconciler.Event
 	}{
 		{
@@ -428,6 +462,97 @@ func TestFinalize(t *testing.T) {
 			},
 			want: controller.NewRequeueAfter(finalizerRequeueInterval),
 		},
+		{
+			name: "migration: merge-patch finalizer removed successfully",
+			pr: &pipelinev1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-pr",
+					Namespace:  "test-ns",
+					Finalizers: []string{"results.tekton.dev/pipelinerun"},
+					Annotations: map[string]string{
+						resultsannotation.Stored: "true",
+					},
+					ManagedFields: mergePatchFinalizerManagedFields("results.tekton.dev/pipelinerun"),
+				},
+				Status: pipelinev1.PipelineRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg:  cfg,
+			want: nil,
+		},
+		{
+			name: "migration: merge-patch removal fails - requeue",
+			pr: &pipelinev1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-pr",
+					Namespace:  "test-ns",
+					Finalizers: []string{"results.tekton.dev/pipelinerun"},
+					Annotations: map[string]string{
+						resultsannotation.Stored: "true",
+					},
+					ManagedFields: mergePatchFinalizerManagedFields("results.tekton.dev/pipelinerun"),
+				},
+				Status: pipelinev1.PipelineRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg:      cfg,
+			patchErr: fmt.Errorf("connection refused"),
+			want:     controller.NewRequeueAfter(finalizerRequeueInterval),
+		},
+		{
+			name: "no migration: finalizer owned by SSA - no patch needed",
+			pr: &pipelinev1.PipelineRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-pr",
+					Namespace:  "test-ns",
+					Finalizers: []string{"results.tekton.dev/pipelinerun"},
+					Annotations: map[string]string{
+						resultsannotation.Stored: "true",
+					},
+					ManagedFields: []metav1.ManagedFieldsEntry{{
+						Operation: metav1.ManagedFieldsOperationApply,
+						FieldsV1:  &metav1.FieldsV1{Raw: []byte(`{"f:metadata":{"f:finalizers":{".":{},"v:\"results.tekton.dev/pipelinerun\"":{}}}}`)},
+					}},
+				},
+				Status: pipelinev1.PipelineRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg:  cfg,
+			want: nil,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -437,9 +562,180 @@ func TestFinalize(t *testing.T) {
 				cfg: tc.cfg,
 			}
 
+			if tc.pr.ManagedFields != nil {
+				fakeClient := fakeversioned.NewSimpleClientset(tc.pr)
+				if tc.patchErr != nil {
+					fakeClient.PrependReactor("patch", "pipelineruns", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+						return true, nil, tc.patchErr
+					})
+				}
+				r.pipelineClient = fakeClient
+			}
+
 			got := r.finalize(ctx, tc.pr, tc.reconcileError)
 			if !errors.Is(got, tc.want) {
 				t.Errorf("finalize() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAreAllUnderlyingRunsReadyForDeletion_WithCustomRuns(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *pipelinev1.PipelineRun
+		want bool
+	}{{
+		name: "all CustomRuns are ready to be deleted",
+		in: &pipelinev1.PipelineRun{
+			Status: pipelinev1.PipelineRunStatus{
+				PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+					ChildReferences: []pipelinev1.ChildStatusReference{{
+						TypeMeta: runtime.TypeMeta{
+							Kind:       "CustomRun",
+							APIVersion: "tekton.dev/v1beta1",
+						},
+						Name: "custom-foo",
+					}},
+				},
+			},
+		},
+		want: true,
+	},
+		{
+			name: "one CustomRun is ready, one TaskRun is not",
+			in: &pipelinev1.PipelineRun{
+				Status: pipelinev1.PipelineRunStatus{
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						ChildReferences: []pipelinev1.ChildStatusReference{{
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "TaskRun",
+								APIVersion: "tekton.dev/v1",
+							},
+							Name: "taskrun-bar",
+						}, {
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "CustomRun",
+								APIVersion: "tekton.dev/v1beta1",
+							},
+							Name: "custom-foo",
+						}},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "all mixed children (TaskRun and CustomRun) are ready",
+			in: &pipelinev1.PipelineRun{
+				Status: pipelinev1.PipelineRunStatus{
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						ChildReferences: []pipelinev1.ChildStatusReference{{
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "TaskRun",
+								APIVersion: "tekton.dev/v1",
+							},
+							Name: "taskrun-foo",
+						}, {
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "CustomRun",
+								APIVersion: "tekton.dev/v1beta1",
+							},
+							Name: "custom-bar",
+						}},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "consider that missing CustomRuns can be deleted",
+			in: &pipelinev1.PipelineRun{
+				Status: pipelinev1.PipelineRunStatus{
+					PipelineRunStatusFields: pipelinev1.PipelineRunStatusFields{
+						ChildReferences: []pipelinev1.ChildStatusReference{{
+							TypeMeta: runtime.TypeMeta{
+								Kind:       "CustomRun",
+								APIVersion: "tekton.dev/v1beta1",
+							},
+							Name: "custom-missing",
+						}},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+
+	taskRunIndexer := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
+	customRunIndexer := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, cache.Indexers{})
+
+	// Put TaskRuns into the indexer
+	if err := taskRunIndexer.Add(&pipelinev1.TaskRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "taskrun-foo",
+			Namespace: corev1.NamespaceDefault,
+			Annotations: map[string]string{
+				resultsannotation.ChildReadyForDeletion: "true",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := taskRunIndexer.Add(&pipelinev1.TaskRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "taskrun-bar",
+			Namespace: corev1.NamespaceDefault,
+			// Missing ChildReadyForDeletion annotation
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Put CustomRuns into the indexer
+	if err := customRunIndexer.Add(&pipelinev1beta1.CustomRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-foo",
+			Namespace: corev1.NamespaceDefault,
+			Annotations: map[string]string{
+				resultsannotation.ChildReadyForDeletion: "true",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := customRunIndexer.Add(&pipelinev1beta1.CustomRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-bar",
+			Namespace: corev1.NamespaceDefault,
+			Annotations: map[string]string{
+				resultsannotation.ChildReadyForDeletion: "true",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reconciler := &Reconciler{
+				taskRunLister:   pipelinev1listers.NewTaskRunLister(taskRunIndexer),
+				customRunLister: pipelinev1beta1listers.NewCustomRunLister(customRunIndexer),
+			}
+
+			test.in.Namespace = corev1.NamespaceDefault
+
+			ctx := context.Background()
+			ctx = logging.WithLogger(ctx, zaptest.NewLogger(t).Sugar())
+			got, err := reconciler.areAllChildRunsReadyForDeletion(ctx, test.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if test.want != got {
+				t.Fatalf("Want %t, but got %t", test.want, got)
 			}
 		})
 	}
