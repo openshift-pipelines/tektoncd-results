@@ -14,7 +14,7 @@ RUN go build -ldflags="-X 'knative.dev/pkg/changeset.rev=$(cat HEAD)'" -mod=vend
     ./cmd/retention-policy-agent
 
 FROM $RUNTIME
-ARG VERSION=next
+ARG VERSION=1.20
 
 ENV RETENTION_POLICY_AGENT=/usr/local/bin/results-retention-policy-agent \
     KO_APP=/ko-app \
@@ -26,7 +26,7 @@ COPY head ${KO_DATA_PATH}/HEAD
 
 LABEL \
     com.redhat.component="openshift-pipelines-results-retention-policy-agent-rhel9-container" \
-    cpe="cpe:/a:redhat:openshift_pipelines:next::" \
+    cpe="cpe:/a:redhat:openshift_pipelines:1.20::el9" \
     description="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
     io.k8s.description="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
     io.k8s.display-name="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
@@ -34,7 +34,7 @@ LABEL \
     maintainer="pipelines-extcomm@redhat.com" \
     name="openshift-pipelines/pipelines-results-retention-policy-agent-rhel9" \
     summary="Red Hat OpenShift Pipelines tektoncd-results retention-policy-agent" \
-    version="next"
+    version="v1.20.5"
 
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
