@@ -27,7 +27,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/json-iterator/go v1.1.12
-	github.com/mattn/go-sqlite3 v1.14.50
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/prometheus/client_golang v1.24.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
@@ -43,7 +43,7 @@ require (
 	go.uber.org/zap v1.28.0
 	gocloud.dev v0.46.0
 	golang.org/x/net v0.58.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.297.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772
 	google.golang.org/grpc v1.83.2
