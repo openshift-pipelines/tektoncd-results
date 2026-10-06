@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package records provides commands for interacting with Results records.
 package records
 
 import (
@@ -30,10 +29,9 @@ func GetRecordCommand(params *flags.Params) *cobra.Command {
 	opts := &flags.GetOptions{}
 
 	cmd := &cobra.Command{
-		Use:        "get [flags] <record-name>",
-		Short:      "[DEPRECATED] Get Record by <record-name>",
-		Deprecated: "use 'pipelinerun describe' or 'taskrun describe' to get detailed information about PipelineRuns and TaskRuns",
-		Long:       "Get Record by <record-name>. <record-name> is typically of format <namespace>/results/<parent-run-uuid>/records/<child-run-uuid>",
+		Use:   "get [flags] <record-name>",
+		Short: "[To be deprecated] Get Record by <record-name>",
+		Long:  "Get Record by <record-name>. <record-name> is typically of format <namespace>/results/<parent-run-uuid>/records/<child-run-uuid>",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resp, err := params.ResultsClient.GetRecord(cmd.Context(), &pb.GetRecordRequest{
 				Name: args[0],

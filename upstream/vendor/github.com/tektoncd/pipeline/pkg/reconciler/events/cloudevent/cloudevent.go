@@ -20,8 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
@@ -32,9 +35,6 @@ import (
 type TektonEventType string
 
 const (
-	// TaskRunQueuedEventV1 is sent for TaskRuns that have been created but not yet
-	// picked up by the core TaskRun reconciler (no condition set yet)
-	TaskRunQueuedEventV1 TektonEventType = "dev.tekton.event.taskrun.queued.v1"
 	// TaskRunStartedEventV1 is sent for TaskRuns with "ConditionSucceeded" "Unknown"
 	// the first time they are picked up by the reconciler
 	TaskRunStartedEventV1 TektonEventType = "dev.tekton.event.taskrun.started.v1"
@@ -48,9 +48,6 @@ const (
 	TaskRunSuccessfulEventV1 TektonEventType = "dev.tekton.event.taskrun.successful.v1"
 	// TaskRunFailedEventV1 is sent for TaskRuns with "ConditionSucceeded" "False"
 	TaskRunFailedEventV1 TektonEventType = "dev.tekton.event.taskrun.failed.v1"
-	// PipelineRunQueuedEventV1 is sent for PipelineRuns that have been created but not yet
-	// picked up by the core PipelineRun reconciler (no condition set yet)
-	PipelineRunQueuedEventV1 TektonEventType = "dev.tekton.event.pipelinerun.queued.v1"
 	// PipelineRunStartedEventV1 is sent for PipelineRuns with "ConditionSucceeded" "Unknown"
 	// the first time they are picked up by the reconciler
 	PipelineRunStartedEventV1 TektonEventType = "dev.tekton.event.pipelinerun.started.v1"
@@ -99,7 +96,7 @@ type TektonCloudEventData struct {
 }
 
 // newTektonCloudEventData returns a new instance of TektonCloudEventData
-func newTektonCloudEventData(ctx context.Context, runObject v1beta1.RunObject) (TektonCloudEventData, error) {
+func newTektonCloudEventData(ctx context.Context, runObject objectWithCondition) (TektonCloudEventData, error) {
 	tektonCloudEventData := TektonCloudEventData{}
 	switch v := runObject.(type) {
 	case *v1beta1.TaskRun:
@@ -124,22 +121,9 @@ func newTektonCloudEventData(ctx context.Context, runObject v1beta1.RunObject) (
 	return tektonCloudEventData, nil
 }
 
-// EventForObjectWithCondition creates a new event for an objectWithCondition,
+// EventForObjectWithCondition creates a new event based for an objectWithCondition,
 // or returns an error if not possible.
-//
-// Deprecated: This function was never used outside of this package and will be removed
-// in a future release. There is no replacement.
 func EventForObjectWithCondition(ctx context.Context, runObject objectWithCondition) (*cloudevents.Event, error) {
-	ro, ok := runObject.(v1beta1.RunObject)
-	if !ok {
-		return nil, fmt.Errorf("object %T does not implement v1beta1.RunObject", runObject)
-	}
-	return eventForRunObject(ctx, ro)
-}
-
-// eventForRunObject creates a new event based for a v1beta1.RunObject,
-// or returns an error if not possible.
-func eventForRunObject(ctx context.Context, runObject v1beta1.RunObject) (*cloudevents.Event, error) {
 	event := cloudevents.NewEvent()
 	event.SetID(uuid.New().String())
 	event.SetSubject(runObject.GetObjectMeta().GetName())
@@ -175,20 +159,14 @@ func eventForRunObject(ctx context.Context, runObject v1beta1.RunObject) (*cloud
 	return &event, nil
 }
 
-func getEventType(runObject v1beta1.RunObject) (*TektonEventType, error) {
+func getEventType(runObject objectWithCondition) (*TektonEventType, error) {
 	var eventType TektonEventType
 	c := runObject.GetStatusCondition().GetCondition(apis.ConditionSucceeded)
 	if c == nil {
-		// When a resource is created, it may not have any condition until it's
-		// picked up by the core reconciler. We send a "queued" or "started" event
-		// depending on the resource type.
+		// When the `Run` is created, it may not have any condition until it's
+		// picked up by the `Run` reconciler. In that case we consider the run
+		// as started. In all other cases, conditions have to be initialised
 		switch runObject.(type) {
-		case *v1.TaskRun, *v1beta1.TaskRun:
-			eventType = TaskRunQueuedEventV1
-			return &eventType, nil
-		case *v1.PipelineRun, *v1beta1.PipelineRun:
-			eventType = PipelineRunQueuedEventV1
-			return &eventType, nil
 		case *v1beta1.CustomRun:
 			eventType = CustomRunStartedEventV1
 			return &eventType, nil
@@ -272,4 +250,22 @@ func getEventType(runObject v1beta1.RunObject) (*TektonEventType, error) {
 		return nil, fmt.Errorf("unknown condition for in %T.Status %s", runObject, c.Status)
 	}
 	return &eventType, nil
+}
+
+// GetCloudEventDeliveryCompareOptions returns compare options to sort
+// and compare a list of CloudEventDelivery
+func GetCloudEventDeliveryCompareOptions() []cmp.Option {
+	// Setup cmp options
+	cloudDeliveryStateCompare := func(x, y v1beta1.CloudEventDeliveryState) bool {
+		return cmp.Equal(x.Condition, y.Condition) && cmp.Equal(x.RetryCount, y.RetryCount)
+	}
+	less := func(x, y v1beta1.CloudEventDelivery) bool {
+		return strings.Compare(x.Target, y.Target) < 0 || (strings.Compare(x.Target, y.Target) == 0 && x.Status.SentAt.Before(y.Status.SentAt))
+	}
+	return []cmp.Option{
+		cmpopts.SortSlices(less),
+		cmp.Comparer(func(x, y v1beta1.CloudEventDelivery) bool {
+			return (strings.Compare(x.Target, y.Target) == 0) && cloudDeliveryStateCompare(x.Status, y.Status)
+		}),
+	}
 }

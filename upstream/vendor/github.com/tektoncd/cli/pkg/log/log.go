@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:revive // package name matches stdlib by design
 package log
 
 import "k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,9 +27,8 @@ var pipelineGroupResource = schema.GroupVersionResource{Group: "tekton.dev", Res
 
 // Log represents data to write on log channel
 type Log struct {
-	Pipeline        string
-	Task            string
-	TaskDisplayName string
-	Step            string
-	Log             string
+	Pipeline string
+	Task     string
+	Step     string
+	Log      string
 }

@@ -12,28 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package pipelinerun provides the PipelineRun reconciler controller.
 package pipelinerun
 
 import (
 	"context"
 
-	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
 	"github.com/tektoncd/results/pkg/apis/config"
-	"github.com/tektoncd/results/pkg/metrics"
 	"github.com/tektoncd/results/pkg/pipelinerunmetrics"
-	"github.com/tektoncd/results/pkg/watcher/logs"
-	"github.com/tektoncd/results/pkg/watcher/reconciler"
-	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"knative.dev/pkg/configmap"
-	"knative.dev/pkg/controller"
-	"knative.dev/pkg/logging"
 
 	pipelineclient "github.com/tektoncd/pipeline/pkg/client/injection/client"
 	pipelineruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/pipelinerun"
 	taskruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1/taskrun"
-	customruninformer "github.com/tektoncd/pipeline/pkg/client/injection/informers/pipeline/v1beta1/customrun"
+	pipelinerunreconciler "github.com/tektoncd/pipeline/pkg/client/injection/reconciler/pipeline/v1/pipelinerun"
+	"github.com/tektoncd/results/pkg/watcher/logs"
+	"github.com/tektoncd/results/pkg/watcher/reconciler"
+	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
+	"knative.dev/pkg/controller"
+	"knative.dev/pkg/logging"
 )
 
 // NewController creates a Controller for watching PipelineRuns.
@@ -46,42 +43,31 @@ func NewControllerWithConfig(ctx context.Context, resultsClient pb.ResultsClient
 	pipelineRunInformer := pipelineruninformer.Get(ctx)
 	pipelineRunLister := pipelineRunInformer.Lister()
 	logger := logging.FromContext(ctx)
-	configStore := config.NewStore(logger.Named("config-store"))
+	configStore := config.NewStore(logger.Named("config-store"), pipelinerunmetrics.MetricsOnStore(logger))
 	configStore.WatchConfigs(cmw)
 
-	// Initialize metrics once at startup
-	metrics.EnsureMetricsInitialized(logger)
-	pipelineRunMetrics, err := pipelinerunmetrics.NewRecorder(ctx)
-	if err != nil {
-		logger.Errorf("Failed to create pipelinerun metrics recorder: %v. Metrics will not be recorded.", err)
-	}
-
 	c := &Reconciler{
-		kubeClientSet:      kubeclient.Get(ctx),
-		resultsClient:      resultsClient,
-		logsClient:         logs.Get(ctx),
-		pipelineRunLister:  pipelineRunLister,
-		customRunLister:    customruninformer.Get(ctx).Lister(),
-		taskRunLister:      taskruninformer.Get(ctx).Lister(),
-		pipelineClient:     pipelineclient.Get(ctx),
-		cfg:                cfg,
-		configStore:        configStore,
-		metrics:            metrics.NewRecorder(),
-		pipelineRunMetrics: pipelineRunMetrics,
+		kubeClientSet:     kubeclient.Get(ctx),
+		resultsClient:     resultsClient,
+		logsClient:        logs.Get(ctx),
+		pipelineRunLister: pipelineRunLister,
+		taskRunLister:     taskruninformer.Get(ctx).Lister(),
+		pipelineClient:    pipelineclient.Get(ctx),
+		cfg:               cfg,
+		configStore:       configStore,
+		metrics:           pipelinerunmetrics.NewRecorder(),
 	}
 
 	impl := pipelinerunreconciler.NewImpl(ctx, c, func(_ *controller.Impl) controller.Options {
 		return controller.Options{
 			// This results pipelinerun reconciler shouldn't mutate the pipelinerun's status.
-			SkipStatusUpdates:               true,
-			ConfigStore:                     configStore,
-			FinalizerName:                   "results.tekton.dev/pipelinerun",
-			UseServerSideApplyForFinalizers: true,
-			FinalizerFieldManager:           "tekton-results-watcher/finalizers",
+			SkipStatusUpdates: true,
+			ConfigStore:       configStore,
+			FinalizerName:     "results.tekton.dev/pipelinerun",
 		}
 	})
 
-	_, err = pipelineRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+	_, err := pipelineRunInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
 	if err != nil {
 		logger.Panicf("Couldn't register PipelineRun informer event handler: %w", err)
 	}

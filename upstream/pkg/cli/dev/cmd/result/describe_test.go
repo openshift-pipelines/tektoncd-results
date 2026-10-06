@@ -4,8 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tektoncd/results/pkg/cli/testutils"
-
 	"github.com/tektoncd/results/pkg/cli/dev/flags"
 
 	"github.com/jonboulle/clockwork"
@@ -48,12 +46,11 @@ func TestDescribeResult(t *testing.T) {
 	}
 	cmd := Command(param)
 
-	output, err := testutils.ExecuteCommand(cmd, "describe", "default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7")
+	output, err := test.ExecuteCommand(cmd, "describe", "default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7")
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-	test.AssertOutput(t, `Command "describe" is deprecated, use 'pipelinerun describe' or 'taskrun describe' to get detailed information about PipelineRuns and TaskRuns
-Name:   default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7
+	test.AssertOutput(t, `Name:   default/results/e6b4b2e3-d876-4bbe-a927-95c691b6fdc7
 UID:    949eebd9-1cf7-478f-a547-9ee313035f10
 Annotations:
 	object.metadata.name=hello-goodbye-run-vfsxn

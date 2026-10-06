@@ -1,4 +1,3 @@
-// Package migrator provides the interface and implementation for database schema migration in GORM.
 package migrator
 
 import (
@@ -408,15 +407,15 @@ func (m Migrator) DropColumn(value interface{}, name string) error {
 	})
 }
 
-// AlterColumn alter value's `field` column's type based on schema definition
+// AlterColumn alter value's `field` column' type based on schema definition
 func (m Migrator) AlterColumn(value interface{}, field string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		if stmt.Schema != nil {
 			if field := stmt.Schema.LookUpField(field); field != nil {
-				fieldType := m.FullDataTypeOf(field)
+				fileType := m.FullDataTypeOf(field)
 				return m.DB.Exec(
 					"ALTER TABLE ? ALTER COLUMN ? TYPE ?",
-					m.CurrentTable(stmt), clause.Column{Name: field.DBName}, fieldType,
+					m.CurrentTable(stmt), clause.Column{Name: field.DBName}, fileType,
 				).Error
 
 			}
@@ -560,17 +559,9 @@ func (m Migrator) MigrateColumn(value interface{}, field *schema.Field, columnTy
 			case schema.Bool:
 				v1, _ := strconv.ParseBool(dv)
 				v2, _ := strconv.ParseBool(field.DefaultValue)
-				if v1 != v2 {
-					alterColumn = true
-				}
-			case schema.String:
-				if dv != field.DefaultValue && dv != strings.Trim(field.DefaultValue, "'\"") {
-					alterColumn = true
-				}
+				alterColumn = v1 != v2
 			default:
-				if dv != field.DefaultValue {
-					alterColumn = true
-				}
+				alterColumn = dv != field.DefaultValue
 			}
 		}
 	}

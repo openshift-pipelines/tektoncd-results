@@ -37,9 +37,6 @@ type CreatePullThroughCacheRuleInput struct {
 
 	// The repository name prefix to use when caching images from the source registry.
 	//
-	// There is always an assumed / applied to the end of the prefix. If you specify
-	// ecr-public as the prefix, Amazon ECR treats that as ecr-public/ .
-	//
 	// This member is required.
 	EcrRepositoryPrefix *string
 
@@ -47,23 +44,18 @@ type CreatePullThroughCacheRuleInput struct {
 	// pull through cache rule. The following is the syntax to use for each supported
 	// upstream registry.
 	//
-	//   - Amazon ECR ( ecr ) – .dkr.ecr..amazonaws.com
+	//   - Amazon ECR Public ( ecr-public ) - public.ecr.aws
 	//
-	//   - Amazon ECR Public ( ecr-public ) – public.ecr.aws
+	//   - Docker Hub ( docker-hub ) - registry-1.docker.io
 	//
-	//   - Docker Hub ( docker-hub ) – registry-1.docker.io
+	//   - Quay ( quay ) - quay.io
 	//
-	//   - GitHub Container Registry ( github-container-registry ) – ghcr.io
+	//   - Kubernetes ( k8s ) - registry.k8s.io
 	//
-	//   - GitLab Container Registry ( gitlab-container-registry ) –
-	//   registry.gitlab.com
+	//   - GitHub Container Registry ( github-container-registry ) - ghcr.io
 	//
-	//   - Kubernetes ( k8s ) – registry.k8s.io
-	//
-	//   - Microsoft Azure Container Registry ( azure-container-registry ) –
+	//   - Microsoft Azure Container Registry ( azure-container-registry ) -
 	//   .azurecr.io
-	//
-	//   - Quay ( quay ) – quay.io
 	//
 	// This member is required.
 	UpstreamRegistryUrl *string
@@ -72,11 +64,6 @@ type CreatePullThroughCacheRuleInput struct {
 	// secret that identifies the credentials to authenticate to the upstream registry.
 	CredentialArn *string
 
-	// Amazon Resource Name (ARN) of the IAM role to be assumed by Amazon ECR to
-	// authenticate to the ECR upstream registry. This role must be in the same account
-	// as the registry that you are configuring.
-	CustomRoleArn *string
-
 	// The Amazon Web Services account ID associated with the registry to create the
 	// pull through cache rule for. If you do not specify a registry, the default
 	// registry is assumed.
@@ -84,10 +71,6 @@ type CreatePullThroughCacheRuleInput struct {
 
 	// The name of the upstream registry.
 	UpstreamRegistry types.UpstreamRegistry
-
-	// The repository name prefix of the upstream registry to match with the upstream
-	// repository name. When this field isn't specified, Amazon ECR will use the ROOT .
-	UpstreamRepositoryPrefix *string
 
 	noSmithyDocumentSerde
 }
@@ -102,9 +85,6 @@ type CreatePullThroughCacheRuleOutput struct {
 	// secret associated with the pull through cache rule.
 	CredentialArn *string
 
-	// The ARN of the IAM role associated with the pull through cache rule.
-	CustomRoleArn *string
-
 	// The Amazon ECR repository prefix associated with the pull through cache rule.
 	EcrRepositoryPrefix *string
 
@@ -116,9 +96,6 @@ type CreatePullThroughCacheRuleOutput struct {
 
 	// The upstream registry URL associated with the pull through cache rule.
 	UpstreamRegistryUrl *string
-
-	// The upstream repository prefix associated with the pull through cache rule.
-	UpstreamRepositoryPrefix *string
 
 	// Metadata pertaining to the operation's result.
 	ResultMetadata middleware.Metadata
@@ -190,9 +167,6 @@ func (c *Client) addOperationCreatePullThroughCacheRuleMiddlewares(stack *middle
 	if err = addUserAgentRetryMode(stack, options); err != nil {
 		return err
 	}
-	if err = addCredentialSource(stack, options); err != nil {
-		return err
-	}
 	if err = addOpCreatePullThroughCacheRuleValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -214,13 +188,16 @@ func (c *Client) addOperationCreatePullThroughCacheRuleMiddlewares(stack *middle
 	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
 		return err
 	}
-	if err = addInterceptAttempt(stack, options); err != nil {
+	if err = addSpanInitializeEnd(stack); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil

@@ -1,4 +1,3 @@
-// Package flags provides flag definitions for the Results CLI.
 package flags
 
 import (

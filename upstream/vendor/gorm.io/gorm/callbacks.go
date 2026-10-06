@@ -89,14 +89,8 @@ func (p *processor) Execute(db *DB) *DB {
 		resetBuildClauses = true
 	}
 
-	if optimizer, ok := stmt.Dest.(StatementModifier); ok {
+	if optimizer, ok := db.Statement.Dest.(StatementModifier); ok {
 		optimizer.ModifyStatement(stmt)
-	}
-
-	if db.DefaultContextTimeout > 0 {
-		if _, ok := stmt.Context.Deadline(); !ok {
-			stmt.Context, _ = context.WithTimeout(stmt.Context, db.DefaultContextTimeout)
-		}
 	}
 
 	// assign model values
@@ -310,7 +304,7 @@ func sortCallbacks(cs []*callback) (fns []func(*DB), err error) {
 					// if after callback sorted, append current callback to last
 					sorted = append(sorted, c.name)
 				} else if curIdx < sortedIdx {
-					return fmt.Errorf("conflicting callback %s with after %s", c.name, c.after)
+					return fmt.Errorf("conflicting callback %s with before %s", c.name, c.after)
 				}
 			} else if idx := getRIndex(names, c.after); idx != -1 {
 				// if after callback exists but haven't sorted

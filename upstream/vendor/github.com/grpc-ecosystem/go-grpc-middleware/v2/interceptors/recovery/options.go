@@ -8,9 +8,11 @@ package recovery
 
 import "context"
 
-var defaultOptions = &options{
-	recoveryHandlerFunc: nil,
-}
+var (
+	defaultOptions = &options{
+		recoveryHandlerFunc: nil,
+	}
+)
 
 type options struct {
 	recoveryHandlerFunc RecoveryHandlerFuncContext

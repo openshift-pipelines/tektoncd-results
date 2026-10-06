@@ -80,11 +80,8 @@ func Create(config *Config) func(db *gorm.DB) {
 		ok, mode := hasReturning(db, supportReturning)
 		if ok {
 			if c, ok := db.Statement.Clauses["ON CONFLICT"]; ok {
-				onConflict, _ := c.Expression.(clause.OnConflict)
-				if onConflict.DoNothing {
+				if onConflict, _ := c.Expression.(clause.OnConflict); onConflict.DoNothing {
 					mode |= gorm.ScanOnConflictDoNothing
-				} else if len(onConflict.DoUpdates) > 0 || onConflict.UpdateAll {
-					mode |= gorm.ScanUpdate
 				}
 			}
 

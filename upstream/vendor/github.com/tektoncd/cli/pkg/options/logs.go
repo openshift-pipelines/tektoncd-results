@@ -50,7 +50,6 @@ type LogOptions struct {
 	Tail            int64
 	Timestamps      bool
 	Prefixing       bool
-	Long            bool
 	ExitWithPrError bool
 	// ActivityTimeout is the amount of time to wait for some activity
 	// (e.g. Pod ready) before giving up.

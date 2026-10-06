@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
@@ -39,11 +40,11 @@ import (
 )
 
 const (
-	credsInitHomeMountPrefix       = "tekton-creds-init-home" // #nosec
-	sshKnownHosts                  = "known_hosts"
-	credentialVolumeNamePrefix     = "tekton-creds" // #nosec G101 -- not a credential
-	credentialVolumeNameHashLength = 8
+	credsInitHomeMountPrefix = "tekton-creds-init-home" // #nosec
+	sshKnownHosts            = "known_hosts"
 )
+
+var dnsLabel1123Forbidden = regexp.MustCompile("[^a-zA-Z0-9-]+")
 
 // credsInit reads secrets available to the given service account and
 // searches for annotations matching a specific format (documented in
@@ -97,9 +98,6 @@ func credsInit(ctx context.Context, obj runtime.Object, serviceAccountName, name
 	//  Pod "xxx" is invalid: spec.containers[0].volumeMounts[12].mountPath: Invalid value:
 	//  "/tekton/creds-secrets/demo-docker-credentials": must be unique
 	visitedSecrets := make(map[string]struct{})
-	// Track generated volume names to detect hash collisions, matching the
-	// pattern used by workspace volume naming in pkg/workspace/apply.go.
-	usedNames := make(map[string]struct{})
 	for _, secretEntry := range sa.Secrets {
 		if secretEntry.Name == "" {
 			continue
@@ -132,14 +130,10 @@ func credsInit(ctx context.Context, obj runtime.Object, serviceAccountName, name
 		}
 
 		if matched {
-			// Generate a deterministic volume name from the secret name using
-			// FNV-32a hashing via names.GenerateHashedName, avoiding issues
-			// with DNS label character restrictions (e.g. dots in secret names).
-			name := names.GenerateHashedName(credentialVolumeNamePrefix, secret.Name, credentialVolumeNameHashLength)
-			for _, exists := usedNames[name]; exists; _, exists = usedNames[name] {
-				name = names.GenerateHashedName(credentialVolumeNamePrefix, name+"$", credentialVolumeNameHashLength)
-			}
-			usedNames[name] = struct{}{}
+			// While secret names can use RFC1123 DNS subdomain name rules, the volume mount
+			// name required the stricter DNS label standard, for example no dots anymore.
+			sanitizedName := dnsLabel1123Forbidden.ReplaceAllString(secret.Name, "-")
+			name := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix("tekton-internal-secret-volume-" + sanitizedName)
 			volumeMounts = append(volumeMounts, corev1.VolumeMount{
 				Name:      name,
 				MountPath: credmatcher.VolumeName(secret.Name),

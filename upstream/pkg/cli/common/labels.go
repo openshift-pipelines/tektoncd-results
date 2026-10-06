@@ -42,16 +42,14 @@ type FilterOptions interface {
 	GetPipelineRun() string
 	GetResourceType() string
 	GetUID() string
-	SelectsExactMatch() bool
 }
 
 // BuildFilterString constructs the filter string for the ListRecordsRequest
 func BuildFilterString(opts FilterOptions) string {
 	const (
-		contains       = "data.metadata.%s.contains(\"%s\")"
-		mapEntryEquals = "data.metadata.%s[\"%s\"]==\"%s\""
-		entryEquals    = "data.metadata.%s==\"%s\""
-		dataType       = "data_type==\"%s\""
+		contains = "data.metadata.%s.contains(\"%s\")"
+		equal    = "data.metadata.%s[\"%s\"]==\"%s\""
+		dataType = "data_type==\"%s\""
 	)
 
 	var filters []string
@@ -79,27 +77,19 @@ func BuildFilterString(opts FilterOptions) string {
 			if len(parts) == 2 {
 				key := strings.TrimSpace(parts[0])
 				value := strings.TrimSpace(parts[1])
-				filters = append(filters, fmt.Sprintf(mapEntryEquals, "labels", key, value))
+				filters = append(filters, fmt.Sprintf(equal, "labels", key, value))
 			}
 		}
 	}
 
 	// Handle pipeline name filter
 	if opts.GetResourceName() != "" {
-		if opts.SelectsExactMatch() {
-			filters = append(filters, fmt.Sprintf(entryEquals, "name", opts.GetResourceName()))
-		} else {
-			filters = append(filters, fmt.Sprintf(contains, "name", opts.GetResourceName()))
-		}
+		filters = append(filters, fmt.Sprintf(contains, "name", opts.GetResourceName()))
 	}
 
 	// Handle UID filter
 	if opts.GetUID() != "" {
-		if opts.SelectsExactMatch() {
-			filters = append(filters, fmt.Sprintf(entryEquals, "uid", opts.GetUID()))
-		} else {
-			filters = append(filters, fmt.Sprintf(contains, "uid", opts.GetUID()))
-		}
+		filters = append(filters, fmt.Sprintf(contains, "uid", opts.GetUID()))
 	}
 
 	// Add PipelineRun filter if provided

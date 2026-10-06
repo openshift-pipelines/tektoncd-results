@@ -143,11 +143,7 @@ func (s3s *s3Stream) WriteTo(w io.Writer) (n int64, err error) {
 		return 0, err
 	}
 
-	defer func() {
-		if cerr := outPut.Body.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
+	defer outPut.Body.Close()
 
 	reader := bufio.NewReaderSize(outPut.Body, s3s.size)
 	n, err = reader.WriteTo(w)
@@ -195,7 +191,7 @@ func (s3s *s3Stream) uploadMultiPart(reader io.Reader, partNumber int32, partSiz
 	))
 
 	if err != nil {
-		s3s.client.AbortMultipartUpload(s3s.ctx, &s3.AbortMultipartUploadInput{ //nolint:errcheck,gosec
+		s3s.client.AbortMultipartUpload(s3s.ctx, &s3.AbortMultipartUploadInput{ //nolint:errcheck
 			Bucket:   &s3s.bucket,
 			Key:      &s3s.key,
 			UploadId: &s3s.uploadID,

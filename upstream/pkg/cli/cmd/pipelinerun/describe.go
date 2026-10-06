@@ -1,9 +1,9 @@
-// Package pipelinerun provides CLI commands for PipelineRun resources.
 package pipelinerun
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"text/template"
 
@@ -17,6 +17,7 @@ import (
 	"github.com/tektoncd/cli/pkg/formatted"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/results/pkg/cli/common"
+	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 
 	"k8s.io/cli-runtime/pkg/printers"
@@ -130,10 +131,7 @@ Describe a PipelineRun as json:
 		Use:     "describe [pipelinerun-name]",
 		Aliases: []string{"desc"},
 		Short:   "Describe a PipelineRun",
-		Long: `Describe a PipelineRun by name or UID. If --uid is provided, then PipelineRun name is optional.
-
-If multiple PipelineRuns match the given name, the most recent one is returned.
-Use --uid to target a specific PipelineRun when needed.`,
+		Long:    "Describe a PipelineRun by name or UID. If --uid is provided, then PipelineRun name is optional.",
 		Annotations: map[string]string{
 			"commandType": "main",
 		},
@@ -149,9 +147,13 @@ Use --uid to target a specific PipelineRun when needed.`,
 			}
 			return nil
 		},
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
-			opts.Client = p.RESTClient()
+			var err error
+			opts.Client, err = prerun.InitClient(p, cmd)
+			if err != nil {
+				return err
+			}
 			if len(args) > 0 {
 				opts.ResourceName = args[0]
 			}
@@ -159,57 +161,48 @@ Use --uid to target a specific PipelineRun when needed.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+
+			// Build filter string to find the PipelineRun
+			filter := common.BuildFilterString(opts)
+
+			// Handle namespace
+			parent := fmt.Sprintf("%s/results/-", p.Namespace())
+
+			// Create record client
 			recordClient := records.NewClient(opts.Client)
 
-			var record *pb.Record
+			// Find the PipelineRun record
+			resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
+				Parent:   parent,
+				Filter:   filter,
+				PageSize: 25,
+			}, "")
 
-			if opts.UID != "" {
-				// Direct primary key lookup by UID
-				r, err := recordClient.GetRecord(ctx, p.Namespace(), opts.UID)
-				if err == nil {
-					record = r
-				} else {
-					// Fallback: filter by record name column (text, indexed)
-					// instead of data.metadata.uid (JSONB, unindexed).
-					filter := fmt.Sprintf(`name=="%s"`, opts.UID)
-					parent := fmt.Sprintf("%s/results/-", p.Namespace())
-					resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
-						Parent:   parent,
-						Filter:   filter,
-						OrderBy:  "create_time desc",
-						PageSize: 5,
-					}, "")
-					if err != nil {
-						return fmt.Errorf("failed to find PipelineRun: %v", err)
-					}
-					if len(resp.Records) == 0 {
-						if opts.ResourceName != "" {
-							return fmt.Errorf("no PipelineRun found with name %s and UID %s", opts.ResourceName, opts.UID)
-						}
-						return fmt.Errorf("no PipelineRun found with UID %s", opts.UID)
-					}
-					record = resp.Records[0]
+			if err != nil {
+				return fmt.Errorf("failed to find PipelineRun: %v", err)
+			}
+			if len(resp.Records) == 0 {
+				if opts.UID != "" && opts.ResourceName != "" {
+					return fmt.Errorf("no PipelineRun found with name %s and UID %s", opts.ResourceName, opts.UID)
+				} else if opts.UID != "" {
+					return fmt.Errorf("no PipelineRun found with UID %s", opts.UID)
 				}
-			} else {
-				filter := common.BuildFilterString(opts)
-				parent := fmt.Sprintf("%s/results/-", p.Namespace())
-				resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
-					Parent:   parent,
-					Filter:   filter,
-					OrderBy:  "create_time desc",
-					PageSize: 5,
-				}, "")
-				if err != nil {
-					return fmt.Errorf("failed to find PipelineRun: %v", err)
-				}
-				if len(resp.Records) == 0 {
-					return fmt.Errorf("no PipelineRun found with name %s", opts.ResourceName)
-				}
-				record = resp.Records[0]
+				return fmt.Errorf("no PipelineRun found with name %s", opts.ResourceName)
 			}
 
+			// If multiple PipelineRuns are found, return an error
+			if len(resp.Records) > 1 {
+				var uids []string
+				for _, record := range resp.Records {
+					uids = append(uids, record.Uid)
+				}
+				return fmt.Errorf("multiple PipelineRuns found. Use a more specific name or UID. Available UIDs are: %s",
+					strings.Join(uids, ", "))
+			}
+
+			// Parse record to PipelineRun
 			var pr v1.PipelineRun
-			if err := json.Unmarshal(record.Data.Value, &pr); err != nil {
+			if err := json.Unmarshal(resp.Records[0].Data.Value, &pr); err != nil {
 				return fmt.Errorf("failed to unmarshal PipelineRun data: %v", err)
 			}
 

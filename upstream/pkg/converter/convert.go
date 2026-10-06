@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package converter provides utilities for converting between Result types.
 package converter
 
 import (

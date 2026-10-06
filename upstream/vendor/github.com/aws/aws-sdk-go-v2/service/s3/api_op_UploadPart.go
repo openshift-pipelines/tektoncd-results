@@ -4,6 +4,8 @@ package s3
 
 import (
 	"context"
+	"fmt"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	internalChecksum "github.com/aws/aws-sdk-go-v2/service/internal/checksum"
@@ -111,12 +113,6 @@ import (
 //	only need to specify the server-side encryption parameters in the initial
 //	Initiate Multipart request. For more information, see [CreateMultipartUpload].
 //
-// If you have server-side encryption with customer-provided keys (SSE-C) blocked
-//
-//	for your general purpose bucket, you will get an HTTP 403 Access Denied error
-//	when you specify the SSE-C request headers while writing new data to your
-//	bucket. For more information, see [Blocking or unblocking SSE-C for a general purpose bucket].
-//
 // If you request server-side encryption using a customer-provided encryption key
 //
 //	(SSE-C) in your initiate multipart upload request, you must provide identical
@@ -161,10 +157,6 @@ import (
 //
 // [ListMultipartUploads]
 //
-// You must URL encode any signed header values that contain spaces. For example,
-// if your header value is my file.txt , containing two spaces after my , you must
-// URL encode this value to my%20%20file.txt .
-//
 // [Concepts for directory buckets in Local Zones]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-lzs-for-directory-buckets.html
 // [ListParts]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListParts.html
 // [Authenticating Requests: Using the Authorization Header (Amazon Web Services Signature Version 4)]: https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-auth-using-authorization-header.html
@@ -182,7 +174,6 @@ import (
 // [Multipart upload and permissions]: https://docs.aws.amazon.com/AmazonS3/latest/dev/mpuAndPermissions.html
 // [CreateSession]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateSession.html
 // [Multipart upload API and permissions]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html#mpuAndPermissions
-// [Blocking or unblocking SSE-C for a general purpose bucket]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/blocking-unblocking-s3-c-encryption-gpb.html
 func (c *Client) UploadPart(ctx context.Context, params *UploadPartInput, optFns ...func(*Options)) (*UploadPartOutput, error) {
 	if params == nil {
 		params = &UploadPartInput{}
@@ -299,14 +290,6 @@ type UploadPartInput struct {
 
 	// This header can be used as a data integrity check to verify that the data
 	// received is the same data that was originally sent. This header specifies the
-	// Base64 encoded, 128-bit MD5 digest of the part. For more information, see [Checking object integrity] in
-	// the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumMD5 *string
-
-	// This header can be used as a data integrity check to verify that the data
-	// received is the same data that was originally sent. This header specifies the
 	// Base64 encoded, 160-bit SHA1 digest of the object. For more information, see [Checking object integrity]
 	// in the Amazon S3 User Guide.
 	//
@@ -320,38 +303,6 @@ type UploadPartInput struct {
 	//
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
 	ChecksumSHA256 *string
-
-	// This header can be used as a data integrity check to verify that the data
-	// received is the same data that was originally sent. This header specifies the
-	// Base64 encoded, 512-bit SHA512 digest of the part. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumSHA512 *string
-
-	// This header can be used as a data integrity check to verify that the data
-	// received is the same data that was originally sent. This header specifies the
-	// Base64 encoded, 128-bit XXHASH128 checksum of the part. For more information,
-	// see [Checking object integrity]in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH128 *string
-
-	// This header can be used as a data integrity check to verify that the data
-	// received is the same data that was originally sent. This header specifies the
-	// Base64 encoded, 64-bit XXHASH3 checksum of the part. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH3 *string
-
-	// This header can be used as a data integrity check to verify that the data
-	// received is the same data that was originally sent. This header specifies the
-	// Base64 encoded, 64-bit XXHASH64 checksum of the part. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH64 *string
 
 	// Size of the body in bytes. This parameter is useful when the size of the body
 	// cannot be determined automatically.
@@ -372,8 +323,9 @@ type UploadPartInput struct {
 	// Confirms that the requester knows that they will be charged for the request.
 	// Bucket owners need not specify this parameter in their requests. If either the
 	// source or destination S3 bucket has Requester Pays enabled, the requester will
-	// pay for the corresponding charges. For information about downloading objects
-	// from Requester Pays buckets, see [Downloading Objects in Requester Pays Buckets]in the Amazon S3 User Guide.
+	// pay for corresponding charges to copy the object. For information about
+	// downloading objects from Requester Pays buckets, see [Downloading Objects in Requester Pays Buckets]in the Amazon S3 User
+	// Guide.
 	//
 	// This functionality is not supported for directory buckets.
 	//
@@ -418,75 +370,57 @@ type UploadPartOutput struct {
 	// encryption with Key Management Service (KMS) keys (SSE-KMS).
 	BucketKeyEnabled *bool
 
-	// The Base64 encoded, 32-bit CRC32 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
+	// The Base64 encoded, 32-bit CRC32 checksum of the object. This checksum is only
+	// be present if the checksum was uploaded with the object. When you use an API
+	// operation on an object that was uploaded using multipart uploads, this value may
+	// not be a direct checksum value of the full object. Instead, it's a calculation
+	// based on the checksum values of each individual part. For more information about
+	// how checksums are calculated with multipart uploads, see [Checking object integrity]in the Amazon S3 User
+	// Guide.
 	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html#large-object-checksums
 	ChecksumCRC32 *string
 
-	// The Base64 encoded, 32-bit CRC32C checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
+	// The Base64 encoded, 32-bit CRC32C checksum of the object. This checksum is only
+	// present if the checksum was uploaded with the object. When you use an API
+	// operation on an object that was uploaded using multipart uploads, this value may
+	// not be a direct checksum value of the full object. Instead, it's a calculation
+	// based on the checksum values of each individual part. For more information about
+	// how checksums are calculated with multipart uploads, see [Checking object integrity]in the Amazon S3 User
+	// Guide.
 	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html#large-object-checksums
 	ChecksumCRC32C *string
 
-	// The Base64 encoded, 64-bit CRC64NVME checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
+	// This header can be used as a data integrity check to verify that the data
+	// received is the same data that was originally sent. This header specifies the
+	// Base64 encoded, 64-bit CRC64NVME checksum of the part. For more information,
+	// see [Checking object integrity]in the Amazon S3 User Guide.
 	//
 	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
 	ChecksumCRC64NVME *string
 
-	// The Base64 encoded, 128-bit MD5 checksum of the part. This will only be present
-	// if the checksum was provided in the request. For more information, see [Checking object integrity]in the
-	// Amazon S3 User Guide.
+	// The Base64 encoded, 160-bit SHA1 digest of the object. This will only be
+	// present if the object was uploaded with the object. When you use the API
+	// operation on an object that was uploaded using multipart uploads, this value may
+	// not be a direct checksum value of the full object. Instead, it's a calculation
+	// based on the checksum values of each individual part. For more information about
+	// how checksums are calculated with multipart uploads, see [Checking object integrity]in the Amazon S3 User
+	// Guide.
 	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumMD5 *string
-
-	// The Base64 encoded, 160-bit SHA1 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html#large-object-checksums
 	ChecksumSHA1 *string
 
-	// The Base64 encoded, 256-bit SHA256 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
+	// The Base64 encoded, 256-bit SHA256 digest of the object. This will only be
+	// present if the object was uploaded with the object. When you use an API
+	// operation on an object that was uploaded using multipart uploads, this value may
+	// not be a direct checksum value of the full object. Instead, it's a calculation
+	// based on the checksum values of each individual part. For more information about
+	// how checksums are calculated with multipart uploads, see [Checking object integrity]in the Amazon S3 User
+	// Guide.
 	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
+	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html#large-object-checksums
 	ChecksumSHA256 *string
-
-	// The Base64 encoded, 512-bit SHA512 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumSHA512 *string
-
-	// The Base64 encoded, 128-bit XXHASH128 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH128 *string
-
-	// The Base64 encoded, 64-bit XXHASH3 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH3 *string
-
-	// The Base64 encoded, 64-bit XXHASH64 checksum of the part. This will only be
-	// present if the checksum was provided in the request. For more information, see [Checking object integrity]
-	// in the Amazon S3 User Guide.
-	//
-	// [Checking object integrity]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumXXHASH64 *string
 
 	// Entity tag for the uploaded object.
 	ETag *string
@@ -531,6 +465,9 @@ type UploadPartOutput struct {
 }
 
 func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, options Options) (err error) {
+	if err := stack.Serialize.Add(&setOperationInputMiddleware{}, middleware.After); err != nil {
+		return err
+	}
 	err = stack.Serialize.Add(&awsRestxml_serializeOpUploadPart{}, middleware.After)
 	if err != nil {
 		return err
@@ -539,8 +476,17 @@ func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, opti
 	if err != nil {
 		return err
 	}
+	if err := addProtocolFinalizerMiddlewares(stack, options, "UploadPart"); err != nil {
+		return fmt.Errorf("add protocol finalizers: %v", err)
+	}
 
 	if err = addlegacyEndpointContextSetter(stack, options); err != nil {
+		return err
+	}
+	if err = addSetLoggerMiddleware(stack, options); err != nil {
+		return err
+	}
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
 	if err = addComputeContentLength(stack); err != nil {
@@ -552,7 +498,19 @@ func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, opti
 	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRecordResponseTiming(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
+		return err
+	}
+	if err = addRawResponseToMetadata(stack); err != nil {
+		return err
+	}
+	if err = addRecordResponseTiming(stack); err != nil {
+		return err
+	}
+	if err = addSpanRetryLoop(stack, options); err != nil {
+		return err
+	}
+	if err = addClientUserAgent(stack, options); err != nil {
 		return err
 	}
 	if err = smithyhttp.AddErrorCloseResponseBodyMiddleware(stack); err != nil {
@@ -561,7 +519,16 @@ func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, opti
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
+		return err
+	}
 	if err = addPutBucketContextMiddleware(stack); err != nil {
+		return err
+	}
+	if err = addTimeOffsetBuild(stack, c); err != nil {
+		return err
+	}
+	if err = addUserAgentRetryMode(stack, options); err != nil {
 		return err
 	}
 	if err = addIsExpressUserAgent(stack); err != nil {
@@ -576,13 +543,16 @@ func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, opti
 	if err = addOpUploadPartValidationMiddleware(stack); err != nil {
 		return err
 	}
-	if err = stack.Initialize.Add(newServiceMetadataMiddleware(options.Region, "UploadPart"), middleware.Before); err != nil {
+	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opUploadPart(options.Region), middleware.Before); err != nil {
 		return err
 	}
 	if err = addMetadataRetrieverMiddleware(stack); err != nil {
 		return err
 	}
 	if err = add100Continue(stack, options); err != nil {
+		return err
+	}
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addUploadPartInputChecksumMiddlewares(stack, options); err != nil {
@@ -612,7 +582,16 @@ func (c *Client) addOperationUploadPartMiddlewares(stack *middleware.Stack, opti
 	if err = addSerializeImmutableHostnameBucketMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanInitializeEnd(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil
@@ -623,6 +602,14 @@ func (v *UploadPartInput) bucket() (string, bool) {
 		return "", false
 	}
 	return *v.Bucket, true
+}
+
+func newServiceMetadataMiddleware_opUploadPart(region string) *awsmiddleware.RegisterServiceMetadata {
+	return &awsmiddleware.RegisterServiceMetadata{
+		Region:        region,
+		ServiceID:     ServiceID,
+		OperationName: "UploadPart",
+	}
 }
 
 // getUploadPartRequestAlgorithmMember gets the request checksum algorithm value

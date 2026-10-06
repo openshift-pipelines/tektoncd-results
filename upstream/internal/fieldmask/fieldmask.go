@@ -1,4 +1,3 @@
-// Package fieldmask provides field mask filtering for protobuf messages.
 package fieldmask
 
 import (

@@ -15,19 +15,17 @@
 package transport
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
-	"github.com/google/go-containerregistry/internal/limit"
 	"github.com/google/go-containerregistry/internal/redact"
 )
 
 // Error implements error to support the following error specification:
-// https://github.com/distribution/distribution/blob/aac2f6c8b7c5a6c60190848bab5cbeed2b5ba0a9/docs/spec/api.md#errors
+// https://github.com/docker/distribution/blob/master/docs/spec/api.md#errors
 type Error struct {
 	Errors []Diagnostic `json:"errors,omitempty"`
 	// The http status code returned.
@@ -113,11 +111,7 @@ func (d Diagnostic) String() string {
 type ErrorCode string
 
 // The set of error conditions a registry may return:
-// https://github.com/distribution/distribution/blob/aac2f6c8b7c5a6c60190848bab5cbeed2b5ba0a9/docs/spec/api.md#errors-2
-// maxErrorBodySize limits HTTP error response body reads to prevent OOM when
-// a registry returns an unexpectedly large error body.
-const maxErrorBodySize = 64 * 1024 // 64 KiB
-
+// https://github.com/docker/distribution/blob/master/docs/spec/api.md#errors-2
 const (
 	BlobUnknownErrorCode         ErrorCode = "BLOB_UNKNOWN"
 	BlobUploadInvalidErrorCode   ErrorCode = "BLOB_UPLOAD_INVALID"
@@ -152,7 +146,6 @@ var temporaryErrorCodes = map[ErrorCode]struct{}{
 
 var temporaryStatusCodes = map[int]struct{}{
 	http.StatusRequestTimeout:      {},
-	http.StatusTooManyRequests:     {}, // matches TooManyRequestsErrorCode in temporaryErrorCodes
 	http.StatusInternalServerError: {},
 	http.StatusBadGateway:          {},
 	http.StatusServiceUnavailable:  {},
@@ -168,7 +161,7 @@ func CheckError(resp *http.Response, codes ...int) error {
 		}
 	}
 
-	b, err := limit.ReadAll(resp.Body, maxErrorBodySize)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -177,7 +170,7 @@ func CheckError(resp *http.Response, codes ...int) error {
 }
 
 func makeError(resp *http.Response, body []byte) *Error {
-	// https://github.com/distribution/distribution/blob/aac2f6c8b7c5a6c60190848bab5cbeed2b5ba0a9/docs/spec/api.md#errors
+	// https://github.com/docker/distribution/blob/master/docs/spec/api.md#errors
 	structuredError := &Error{}
 
 	// This can fail if e.g. the response body is not valid JSON. That's fine,
@@ -192,15 +185,10 @@ func makeError(resp *http.Response, body []byte) *Error {
 }
 
 func retryError(resp *http.Response) error {
-	b, err := limit.ReadAll(resp.Body, maxErrorBodySize)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
-
-	// Restore the body so that a subsequent CheckError call (after the
-	// retry loop exhausts its retries) can still read and parse the
-	// structured registry error from the response.
-	resp.Body = io.NopCloser(bytes.NewReader(b))
 
 	rerr := makeError(resp, b)
 	rerr.temporary = true

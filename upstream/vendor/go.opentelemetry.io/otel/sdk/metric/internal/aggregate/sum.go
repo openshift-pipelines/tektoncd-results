@@ -8,46 +8,37 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/internal/x"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 type sumValue[N int64 | float64] struct {
-	n             atomicCounter[N]
-	res           FilteredExemplarReservoir[N]
-	attrs         attribute.Set
-	startTime     time.Time
-	dropExemplars bool
+	n     atomicCounter[N]
+	res   FilteredExemplarReservoir[N]
+	attrs attribute.Set
 }
 
-type sumValueMap[N int64 | float64] struct {
+type valueMap[N int64 | float64] struct {
 	values limitedSyncMap
 	newRes func(attribute.Set) FilteredExemplarReservoir[N]
 }
 
-func (s *sumValueMap[N]) measure(
+func (s *valueMap[N]) measure(
 	ctx context.Context,
 	value N,
 	fltrAttr attribute.Set,
 	droppedAttr []attribute.KeyValue,
 ) {
 	sv := s.values.LoadOrStoreAttr(fltrAttr, func(attr attribute.Set) any {
-		r := s.newRes(attr)
-		_, isDrop := r.(*dropRes[N])
 		return &sumValue[N]{
-			res:           r,
-			attrs:         attr,
-			startTime:     now(),
-			dropExemplars: isDrop,
+			res:   s.newRes(attr),
+			attrs: attr,
 		}
 	}).(*sumValue[N])
 	sv.n.add(value)
 	// It is possible for collection to race with measurement and observe the
 	// exemplar in the batch of metrics after the add() for cumulative sums.
 	// This is an accepted tradeoff to avoid locking during measurement.
-	if !sv.dropExemplars {
-		sv.res.Offer(ctx, value, droppedAttr)
-	}
+	sv.res.Offer(ctx, value, droppedAttr)
 }
 
 // newDeltaSum returns an aggregator that summarizes a set of measurements as
@@ -61,7 +52,7 @@ func newDeltaSum[N int64 | float64](
 	return &deltaSum[N]{
 		monotonic: monotonic,
 		start:     now(),
-		hotColdValMap: [2]sumValueMap[N]{
+		hotColdValMap: [2]valueMap[N]{
 			{
 				values: limitedSyncMap{aggLimit: limit},
 				newRes: r,
@@ -80,7 +71,7 @@ type deltaSum[N int64 | float64] struct {
 	start     time.Time
 
 	hcwg          hotColdWaitGroup
-	hotColdValMap [2]sumValueMap[N]
+	hotColdValMap [2]valueMap[N]
 }
 
 func (s *deltaSum[N]) measure(ctx context.Context, value N, fltrAttr attribute.Set, droppedAttr []attribute.KeyValue) {
@@ -139,7 +130,7 @@ func newCumulativeSum[N int64 | float64](
 	return &cumulativeSum[N]{
 		monotonic: monotonic,
 		start:     now(),
-		sumValueMap: sumValueMap[N]{
+		valueMap: valueMap[N]{
 			values: limitedSyncMap{aggLimit: limit},
 			newRes: r,
 		},
@@ -151,7 +142,7 @@ type cumulativeSum[N int64 | float64] struct {
 	monotonic bool
 	start     time.Time
 
-	sumValueMap[N]
+	valueMap[N]
 }
 
 func (s *cumulativeSum[N]) collect(
@@ -169,19 +160,12 @@ func (s *cumulativeSum[N]) collect(
 	// current length for capacity.
 	dPts := reset(sData.DataPoints, 0, s.values.Len())
 
-	perSeriesStartTimeEnabled := x.PerSeriesStartTimestamps.Enabled()
-
 	var i int
 	s.values.Range(func(_, value any) bool {
 		val := value.(*sumValue[N])
-
-		startTime := s.start
-		if perSeriesStartTimeEnabled {
-			startTime = val.startTime
-		}
 		newPt := metricdata.DataPoint[N]{
 			Attributes: val.attrs,
-			StartTime:  startTime,
+			StartTime:  s.start,
 			Time:       t,
 			Value:      val.n.load(),
 		}

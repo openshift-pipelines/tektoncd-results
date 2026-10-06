@@ -1,4 +1,3 @@
-// Package callbacks provides the default callback functions for GORM operations such as create, query, update, and delete.
 package callbacks
 
 import (

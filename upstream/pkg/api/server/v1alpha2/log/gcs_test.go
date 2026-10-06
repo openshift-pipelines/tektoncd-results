@@ -80,9 +80,6 @@ func NewRecordReplayClient(t *testing.T, modReq func(r *httpreplay.Recorder), po
 		t.Fatal(err)
 	}
 	rep.IgnoreHeader("X-Goog-Gcs-Idempotency-Token")
-	rep.IgnoreHeader("X-Goog-Api-Client")
-	rep.IgnoreHeader("User-Agent")
-	rep.IgnoreHeader("Content-Type")
 
 	recState := new(time.Time)
 	if err := recState.UnmarshalBinary(rep.Initial()); err != nil {
@@ -103,7 +100,6 @@ func NewTestGCPClient(ctx context.Context, port int, t *testing.T) (client *gcp.
 		r.ClearHeaders("Expires")
 		r.ClearHeaders("Signature")
 		r.ClearHeaders("User-Agent")
-		r.ClearHeaders("X-Goog-Api-Client")
 	}, port)
 	if *Record {
 		creds, err := gcp.DefaultCredentials(ctx)
@@ -119,9 +115,6 @@ func NewTestGCPClient(ctx context.Context, port int, t *testing.T) (client *gcp.
 }
 
 func TestGCSReadFrom(t *testing.T) {
-	if !*Record {
-		t.Skip("Skipping TestGCSReadFrom: replay file needs regeneration with -record flag due to library updates")
-	}
 	ctx := context.Background()
 	gcs := &gcsStream{
 		ctx: ctx,

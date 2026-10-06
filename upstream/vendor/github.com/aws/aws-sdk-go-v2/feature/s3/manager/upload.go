@@ -3,7 +3,6 @@ package manager
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/internal/awsutil"
 	internalcontext "github.com/aws/aws-sdk-go-v2/internal/context"
@@ -121,9 +121,6 @@ type UploadOutput struct {
 	// The base64-encoded, 32-bit CRC32C checksum of the object.
 	ChecksumCRC32C *string
 
-	// The base64-encoded, 64-bit CRC64NVME checksum of the object.
-	ChecksumCRC64NVME *string
-
 	// The base64-encoded, 160-bit SHA-1 digest of the object.
 	ChecksumSHA1 *string
 
@@ -159,15 +156,6 @@ type UploadOutput struct {
 	// the S3 Bucket is versioned. If the bucket is not versioned this field
 	// will not be set.
 	VersionID *string
-
-	// The checksum type, which determines how part-level checksums are combined to
-	// create an object-level checksum for multipart objects. You can use this header
-	// as a data integrity check to verify that the checksum type that is received is
-	// the same checksum type that was specified during the CreateMultipartUpload
-	// request. For more information, see [Checking object integrity in the Amazon S3 User Guide].
-	//
-	// [Checking object integrity in the Amazon S3 User Guide]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html
-	ChecksumType types.ChecksumType
 }
 
 // WithUploaderRequestOptions appends to the Uploader's API client options.
@@ -254,29 +242,6 @@ type Uploader struct {
 	// Defines the buffer strategy used when uploading a part
 	BufferProvider ReadSeekerWriteToProvider
 
-	// RequestChecksumCalculation determines when request checksum calculation is performed
-	// for multipart uploads.
-	//
-	// There are two possible values for this setting:
-	//
-	// 1. RequestChecksumCalculationWhenSupported (default): The checksum is always calculated
-	//    if the operation supports it, regardless of whether the user sets an algorithm in the request.
-	//
-	// 2. RequestChecksumCalculationWhenRequired: The checksum is only calculated if the user
-	//    explicitly sets a checksum algorithm in the request. This preserves backwards compatibility
-	//    for applications that don't want automatic checksum calculation.
-	//
-	// Note: S3 Express buckets always require CRC32 checksums regardless of this setting.
-	RequestChecksumCalculation aws.RequestChecksumCalculation
-
-	// By default, the uploader verifies that the number of expected uploaded
-	// parts matches the actual count at the end of an upload.
-	//
-	// You can disable that with this flag, however, Amazon S3 recommends
-	// against doing so because it damages the durability posture of object
-	// uploads.
-	DisableValidateParts bool
-
 	// partPool allows for the re-usage of streaming payload part buffers between upload calls
 	partPool byteSlicePool
 }
@@ -306,13 +271,12 @@ type Uploader struct {
 //	})
 func NewUploader(client UploadAPIClient, options ...func(*Uploader)) *Uploader {
 	u := &Uploader{
-		S3:                         client,
-		PartSize:                   DefaultUploadPartSize,
-		Concurrency:                DefaultUploadConcurrency,
-		LeavePartsOnError:          false,
-		MaxUploadParts:             MaxUploadParts,
-		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenSupported,
-		BufferProvider:             defaultUploadBufferProvider(),
+		S3:                client,
+		PartSize:          DefaultUploadPartSize,
+		Concurrency:       DefaultUploadConcurrency,
+		LeavePartsOnError: false,
+		MaxUploadParts:    MaxUploadParts,
+		BufferProvider:    defaultUploadBufferProvider(),
 	}
 
 	for _, option := range options {
@@ -370,9 +334,8 @@ type uploader struct {
 
 	in *s3.PutObjectInput
 
-	readerPos   int64 // current reader position
-	totalSize   int64 // set to -1 if the size is not known
-	expectParts int64
+	readerPos int64 // current reader position
+	totalSize int64 // set to -1 if the size is not known
 }
 
 // internal logic for deciding whether to upload a single part or use a
@@ -454,11 +417,6 @@ func (u *uploader) initSize() error {
 			// Add one to the part size to account for remainders
 			// during the size calculation. e.g odd number of bytes.
 			u.cfg.PartSize = (u.totalSize / int64(u.cfg.MaxUploadParts)) + 1
-		}
-
-		u.expectParts = u.totalSize / u.cfg.PartSize
-		if u.totalSize%u.cfg.PartSize != 0 {
-			u.expectParts++
 		}
 	}
 
@@ -547,30 +505,22 @@ func (u *uploader) singlePart(r io.ReadSeeker, cleanup func()) (*UploadOutput, e
 		return nil, err
 	}
 
-	uout := &UploadOutput{
+	return &UploadOutput{
 		Location: locationRecorder.location,
-		Key:      params.Key,
-	}
 
-	convertPutObjectResponse(uout, out)
-
-	return uout, nil
-}
-
-func convertPutObjectResponse(dst *UploadOutput, src *s3.PutObjectOutput) {
-	dst.BucketKeyEnabled = aws.ToBool(src.BucketKeyEnabled)
-	dst.ChecksumCRC32 = src.ChecksumCRC32
-	dst.ChecksumCRC32C = src.ChecksumCRC32C
-	dst.ChecksumCRC64NVME = src.ChecksumCRC64NVME
-	dst.ChecksumSHA1 = src.ChecksumSHA1
-	dst.ChecksumSHA256 = src.ChecksumSHA256
-	dst.ETag = src.ETag
-	dst.Expiration = src.Expiration
-	dst.RequestCharged = src.RequestCharged
-	dst.SSEKMSKeyId = src.SSEKMSKeyId
-	dst.ServerSideEncryption = src.ServerSideEncryption
-	dst.VersionID = src.VersionId
-	dst.ChecksumType = src.ChecksumType
+		BucketKeyEnabled:     aws.ToBool(out.BucketKeyEnabled),
+		ChecksumCRC32:        out.ChecksumCRC32,
+		ChecksumCRC32C:       out.ChecksumCRC32C,
+		ChecksumSHA1:         out.ChecksumSHA1,
+		ChecksumSHA256:       out.ChecksumSHA256,
+		ETag:                 out.ETag,
+		Expiration:           out.Expiration,
+		Key:                  params.Key,
+		RequestCharged:       out.RequestCharged,
+		SSEKMSKeyId:          out.SSEKMSKeyId,
+		ServerSideEncryption: out.ServerSideEncryption,
+		VersionID:            out.VersionId,
+	}, nil
 }
 
 type httpClient interface {
@@ -634,8 +584,6 @@ func (a completedParts) Less(i, j int) bool {
 // upload will perform a multipart upload using the firstBuf buffer containing
 // the first chunk of data.
 func (u *multiuploader) upload(firstBuf io.ReadSeeker, cleanup func()) (*UploadOutput, error) {
-	u.initChecksumAlgorithm()
-
 	var params s3.CreateMultipartUploadInput
 	awsutil.Copy(&params, u.in)
 
@@ -695,32 +643,24 @@ func (u *multiuploader) upload(firstBuf io.ReadSeeker, cleanup func()) (*UploadO
 		}
 	}
 
-	out := &UploadOutput{
+	return &UploadOutput{
 		Location:       locationRecorder.location,
 		UploadID:       u.uploadID,
 		CompletedParts: u.parts,
-	}
 
-	convertCompleteMultipartUploadResponse(out, completeOut)
-
-	return out, nil
-}
-
-func convertCompleteMultipartUploadResponse(dst *UploadOutput, src *s3.CompleteMultipartUploadOutput) {
-	dst.BucketKeyEnabled = aws.ToBool(src.BucketKeyEnabled)
-	dst.ChecksumCRC32 = src.ChecksumCRC32
-	dst.ChecksumCRC32C = src.ChecksumCRC32C
-	dst.ChecksumCRC64NVME = src.ChecksumCRC64NVME
-	dst.ChecksumSHA1 = src.ChecksumSHA1
-	dst.ChecksumSHA256 = src.ChecksumSHA256
-	dst.ETag = src.ETag
-	dst.Expiration = src.Expiration
-	dst.Key = src.Key
-	dst.RequestCharged = src.RequestCharged
-	dst.SSEKMSKeyId = src.SSEKMSKeyId
-	dst.ServerSideEncryption = src.ServerSideEncryption
-	dst.VersionID = src.VersionId
-	dst.ChecksumType = src.ChecksumType
+		BucketKeyEnabled:     aws.ToBool(completeOut.BucketKeyEnabled),
+		ChecksumCRC32:        completeOut.ChecksumCRC32,
+		ChecksumCRC32C:       completeOut.ChecksumCRC32C,
+		ChecksumSHA1:         completeOut.ChecksumSHA1,
+		ChecksumSHA256:       completeOut.ChecksumSHA256,
+		ETag:                 completeOut.ETag,
+		Expiration:           completeOut.Expiration,
+		Key:                  completeOut.Key,
+		RequestCharged:       completeOut.RequestCharged,
+		SSEKMSKeyId:          completeOut.SSEKMSKeyId,
+		ServerSideEncryption: completeOut.ServerSideEncryption,
+		VersionID:            completeOut.VersionId,
+	}, nil
 }
 
 func (u *multiuploader) shouldContinue(part int32, nextChunkLen int, err error) (bool, error) {
@@ -746,7 +686,7 @@ func (u *multiuploader) shouldContinue(part int32, nextChunkLen int, err error) 
 			msg = fmt.Sprintf("exceeded total allowed S3 limit MaxUploadParts (%d). Adjust PartSize to fit in this limit",
 				MaxUploadParts)
 		}
-		return false, errors.New(msg)
+		return false, fmt.Errorf(msg)
 	}
 
 	return true, err
@@ -812,29 +752,6 @@ func (u *multiuploader) send(c chunk) error {
 	return nil
 }
 
-func (u *multiuploader) initChecksumAlgorithm() {
-	if u.in.ChecksumAlgorithm != "" {
-		return
-	}
-
-	switch {
-	case u.in.ChecksumCRC32 != nil:
-		u.in.ChecksumAlgorithm = types.ChecksumAlgorithmCrc32
-	case u.in.ChecksumCRC32C != nil:
-		u.in.ChecksumAlgorithm = types.ChecksumAlgorithmCrc32c
-	case u.in.ChecksumCRC64NVME != nil:
-		u.in.ChecksumAlgorithm = types.ChecksumAlgorithmCrc64nvme
-	case u.in.ChecksumSHA1 != nil:
-		u.in.ChecksumAlgorithm = types.ChecksumAlgorithmSha1
-	case u.in.ChecksumSHA256 != nil:
-		u.in.ChecksumAlgorithm = types.ChecksumAlgorithmSha256
-	default:
-		if u.cfg.RequestChecksumCalculation != aws.RequestChecksumCalculationWhenRequired {
-			u.in.ChecksumAlgorithm = types.ChecksumAlgorithmCrc32
-		}
-	}
-}
-
 // geterr is a thread-safe getter for the error object
 func (u *multiuploader) geterr() error {
 	u.m.Lock()
@@ -888,17 +805,6 @@ func (u *multiuploader) complete() *s3.CompleteMultipartUploadOutput {
 	resp, err := u.cfg.S3.CompleteMultipartUpload(u.ctx, &params, u.cfg.ClientOptions...)
 	if err != nil {
 		u.seterr(err)
-		u.fail()
-	}
-
-	// expectParts == 0 means we didn't know the content length upfront and
-	// therefore we can't validate this at all
-	if u.expectParts == 0 || u.cfg.DisableValidateParts {
-		return resp
-	}
-
-	if len(u.parts) != int(u.expectParts) {
-		u.seterr(fmt.Errorf("uploaded part count mismatch: expected %d, got %d", u.expectParts, len(u.parts)))
 		u.fail()
 	}
 

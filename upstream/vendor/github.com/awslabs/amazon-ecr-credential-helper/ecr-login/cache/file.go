@@ -30,12 +30,10 @@ type RegistryCache struct {
 }
 
 type fileCredentialCache struct {
-	path                 string
-	filename             string
-	cachePrefixKey       string
-	publicCacheKey       string
-	legacyCachePrefixKey string
-	legacyPublicCacheKey string
+	path           string
+	filename       string
+	cachePrefixKey string
+	publicCacheKey string
 }
 
 func newRegistryCache() *RegistryCache {
@@ -51,68 +49,29 @@ func newRegistryCache() *RegistryCache {
 // in the same directory where the cache is serialized and deserialized.
 //
 // cachePrefixKey is used for scoping credentials for a given credential cache (i.e. region and
-// accessKey). legacyCachePrefixKey and legacyPublicCacheKey are used for backward compatibility
-// with MD5-based cache keys.
-func NewFileCredentialsCache(path string, filename string, cachePrefixKey string, publicCacheKey string, legacyCachePrefixKey string, legacyPublicCacheKey string) CredentialsCache {
+// accessKey).
+func NewFileCredentialsCache(path string, filename string, cachePrefixKey string, publicCacheKey string) CredentialsCache {
 	if _, err := os.Stat(path); err != nil {
 		os.MkdirAll(path, 0700)
 	}
 	return &fileCredentialCache{
-		path:                 path,
-		filename:             filename,
-		cachePrefixKey:       cachePrefixKey,
-		publicCacheKey:       publicCacheKey,
-		legacyCachePrefixKey: legacyCachePrefixKey,
-		legacyPublicCacheKey: legacyPublicCacheKey,
+		path:           path,
+		filename:       filename,
+		cachePrefixKey: cachePrefixKey,
+		publicCacheKey: publicCacheKey,
 	}
 }
 
 func (f *fileCredentialCache) Get(registry string) *AuthEntry {
 	logrus.WithField("registry", registry).Debug("Checking file cache")
 	registryCache := f.init()
-
-	entry := registryCache.Registries[f.cachePrefixKey+registry]
-	if entry != nil {
-		return entry
-	}
-
-	if isFipsMode() {
-		logrus.WithField("registry", registry).Debug("FIPS mode enabled, skipping legacy MD5 cache lookup")
-		return nil
-	}
-
-	legacyEntry := registryCache.Registries[f.legacyCachePrefixKey+registry]
-	if legacyEntry != nil {
-		logrus.WithField("registry", registry).Debug("Found cached credentials using legacy MD5 key")
-		return legacyEntry
-	}
-
-	logrus.WithField("registry", registry).Debug("Credentials not found")
-	return nil
+	return registryCache.Registries[f.cachePrefixKey+registry]
 }
 
 func (f *fileCredentialCache) GetPublic() *AuthEntry {
 	logrus.Debug("Checking file cache for ECR Public")
 	registryCache := f.init()
-
-	entry := registryCache.Registries[f.publicCacheKey]
-	if entry != nil {
-		return entry
-	}
-
-	if isFipsMode() {
-		logrus.Debug("FIPS mode enabled, skipping legacy MD5 cache lookup for ECR Public")
-		return nil
-	}
-
-	legacyEntry := registryCache.Registries[f.legacyPublicCacheKey]
-	if legacyEntry != nil {
-		logrus.Debug("Found cached ECR Public credentials using legacy MD5 key")
-		return legacyEntry
-	}
-
-	logrus.WithField("registry", "public").Debug("Credentials not found")
-	return nil
+	return registryCache.Registries[f.publicCacheKey]
 }
 
 func (f *fileCredentialCache) Set(registry string, entry *AuthEntry) {

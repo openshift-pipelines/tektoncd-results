@@ -1,4 +1,3 @@
-// Package logger provides a logger interface and its implementation for GORM.
 package logger
 
 import (

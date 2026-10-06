@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config/internal/ini"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+	"github.com/aws/aws-sdk-go-v2/internal/ini"
 	"github.com/aws/aws-sdk-go-v2/internal/shareddefaults"
 	"github.com/aws/smithy-go/logging"
 	smithyrequestcompression "github.com/aws/smithy-go/private/requestcompression"
@@ -113,8 +114,6 @@ const (
 	disableRequestCompression      = "disable_request_compression"
 	requestMinCompressionSizeBytes = "request_min_compression_size_bytes"
 
-	disableClockSkewCorrection = "disable_clock_skew_correction"
-
 	s3DisableExpressSessionAuthKey = "s3_disable_express_session_auth"
 
 	accountIDKey          = "aws_account_id"
@@ -124,10 +123,6 @@ const (
 	responseChecksumValidationKey = "response_checksum_validation"
 	checksumWhenSupported         = "when_supported"
 	checksumWhenRequired          = "when_required"
-
-	authSchemePreferenceKey = "auth_scheme_preference"
-
-	loginSessionKey = "login_session"
 )
 
 // defaultSharedConfigProfile allows for swapping the default profile for testing
@@ -348,10 +343,6 @@ type SharedConfig struct {
 	// retrieved from config file's profile field request_min_compression_size_bytes
 	RequestMinCompressSizeBytes *int64
 
-	// determine if clock skew correction is disabled, default to false
-	// retrieved from config file's profile field disable_clock_skew_correction
-	DisableClockSkewCorrection *bool
-
 	// Whether S3Express auth is disabled.
 	//
 	// This will NOT prevent requests from being made to S3Express buckets, it
@@ -366,12 +357,6 @@ type SharedConfig struct {
 
 	// ResponseChecksumValidation indicates if the response checksum should be validated
 	ResponseChecksumValidation aws.ResponseChecksumValidation
-
-	// Priority list of preferred auth scheme names (e.g. sigv4a).
-	AuthSchemePreference []string
-
-	// Session ARN from an `aws login` session.
-	LoginSession string
 }
 
 func (c SharedConfig) getDefaultsMode(ctx context.Context) (value aws.DefaultsMode, ok bool, err error) {
@@ -507,7 +492,7 @@ func (c SharedConfig) getCustomCABundle(context.Context) (io.Reader, bool, error
 		return nil, false, nil
 	}
 
-	b, err := os.ReadFile(c.CustomCABundle)
+	b, err := ioutil.ReadFile(c.CustomCABundle)
 	if err != nil {
 		return nil, false, err
 	}
@@ -905,10 +890,6 @@ func mergeSections(dst *ini.Sections, src ini.Sections) error {
 			ssoRegionKey,
 			ssoRoleNameKey,
 			ssoStartURLKey,
-
-			authSchemePreferenceKey,
-
-			loginSessionKey,
 		}
 		for i := range stringKeys {
 			if err := mergeStringKey(&srcSection, &dstSection, sectionName, stringKeys[i]); err != nil {
@@ -1155,9 +1136,6 @@ func (c *SharedConfig) setFromIniSection(profile string, section ini.Section) er
 	if err := updateDisableRequestCompression(&c.DisableRequestCompression, section, disableRequestCompression); err != nil {
 		return fmt.Errorf("failed to load %s from shared config, %w", disableRequestCompression, err)
 	}
-	if err := updateDisableRequestCompression(&c.DisableClockSkewCorrection, section, disableClockSkewCorrection); err != nil {
-		return fmt.Errorf("failed to load %s from shared config, %w", disableClockSkewCorrection, err)
-	}
 	if err := updateRequestMinCompressSizeBytes(&c.RequestMinCompressSizeBytes, section, requestMinCompressionSizeBytes); err != nil {
 		return fmt.Errorf("failed to load %s from shared config, %w", requestMinCompressionSizeBytes, err)
 	}
@@ -1187,10 +1165,6 @@ func (c *SharedConfig) setFromIniSection(profile string, section ini.Section) er
 	}
 
 	updateString(&c.ServicesSectionName, section, servicesSectionKey)
-
-	c.AuthSchemePreference = toAuthSchemePreferenceList(section.String(authSchemePreferenceKey))
-
-	updateString(&c.LoginSession, section, loginSessionKey)
 
 	return nil
 }
@@ -1299,13 +1273,6 @@ func (c SharedConfig) getDisableRequestCompression(ctx context.Context) (bool, b
 		return false, false, nil
 	}
 	return *c.DisableRequestCompression, true, nil
-}
-
-func (c SharedConfig) getDisableClockSkewCorrection(ctx context.Context) (bool, bool, error) {
-	if c.DisableClockSkewCorrection == nil {
-		return false, false, nil
-	}
-	return *c.DisableClockSkewCorrection, true, nil
 }
 
 func (c SharedConfig) getAccountIDEndpointMode(ctx context.Context) (aws.AccountIDEndpointMode, bool, error) {
@@ -1710,11 +1677,4 @@ func updateUseFIPSEndpoint(dst *aws.FIPSEndpointState, section ini.Section, key 
 	}
 
 	return
-}
-
-func (c SharedConfig) getAuthSchemePreference() ([]string, bool) {
-	if len(c.AuthSchemePreference) > 0 {
-		return c.AuthSchemePreference, true
-	}
-	return nil, false
 }

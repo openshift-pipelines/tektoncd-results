@@ -1,4 +1,4 @@
-package common //nolint:revive // Package provides shared CLI utilities
+package common
 
 const (
 	// ResourceTypeTaskRun is the string representation of a TaskRun resource

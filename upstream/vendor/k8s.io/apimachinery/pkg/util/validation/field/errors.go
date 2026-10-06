@@ -17,8 +17,8 @@ limitations under the License.
 package field
 
 import (
-	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -33,71 +33,13 @@ type Error struct {
 	Field    string
 	BadValue interface{}
 	Detail   string
-
-	// Origin uniquely identifies where this error was generated from. It is used in testing to
-	// compare expected errors against actual errors without relying on exact detail string matching.
-	// This allows tests to verify the correct validation logic triggered the error
-	// regardless of how the error message might be formatted or localized.
-	//
-	// The value should be either:
-	// - A simple camelCase identifier (e.g., "maximum", "maxItems")
-	// - A structured format using "format=<dash-style-identifier>" for validation errors related to specific formats
-	//   (e.g. "format=k8s-short-name")
-	//
-	// If the Origin corresponds to an existing declarative validation tag or JSON Schema keyword,
-	// use that same name for consistency.
-	//
-	// Origin should be set in the most deeply nested validation function that
-	// can still identify the unique source of the error.
-	Origin string
-
-	// CoveredByDeclarative is true when this error is covered by declarative
-	// validation. This field is to identify errors from imperative validation
-	// that should also be caught by declarative validation.
-	CoveredByDeclarative bool
-
-	// FromImperative denotes these errors are originating from  the hand written validations.
-	FromImperative bool
-
-	// ValidationStabilityLevel denotes the validation stability level of the declarative validation from this error is returned. This should be used in the declarative validations only.
-	ValidationStabilityLevel ValidationStabilityLevel
-}
-
-// ValidationStabilityLevel denotes the stability level of a validation.
-type ValidationStabilityLevel int
-
-const (
-	stabilityLevelUnknown ValidationStabilityLevel = iota
-	stabilityLevelAlpha
-	stabilityLevelBeta
-)
-
-func (v ValidationStabilityLevel) String() string {
-	switch v {
-	case stabilityLevelAlpha:
-		return "alpha"
-	case stabilityLevelBeta:
-		return "beta"
-	default:
-		return "unknown"
-	}
 }
 
 var _ error = &Error{}
 
-// IsAlpha returns true if the error is an alpha validation error.
-func (e *Error) IsAlpha() bool {
-	return e.ValidationStabilityLevel == stabilityLevelAlpha
-}
-
-// IsBeta returns true if the error is a beta validation error.
-func (e *Error) IsBeta() bool {
-	return e.ValidationStabilityLevel == stabilityLevelBeta
-}
-
 // Error implements the error interface.
-func (e *Error) Error() string {
-	return fmt.Sprintf("%s: %s", e.Field, e.ErrorBody())
+func (v *Error) Error() string {
+	return fmt.Sprintf("%s: %s", v.Field, v.ErrorBody())
 }
 
 type OmitValueType struct{}
@@ -106,63 +48,52 @@ var omitValue = OmitValueType{}
 
 // ErrorBody returns the error message without the field name.  This is useful
 // for building nice-looking higher-level error reporting.
-func (e *Error) ErrorBody() string {
+func (v *Error) ErrorBody() string {
 	var s string
-	switch e.Type {
-	case ErrorTypeRequired, ErrorTypeForbidden, ErrorTypeTooLong, ErrorTypeTooShort, ErrorTypeInternal:
-		s = e.Type.String()
-	case ErrorTypeInvalid, ErrorTypeTypeInvalid, ErrorTypeNotSupported,
-		ErrorTypeNotFound, ErrorTypeDuplicate, ErrorTypeTooMany, ErrorTypeTooFew:
-		if e.BadValue == omitValue {
-			s = e.Type.String()
-			break
+	switch {
+	case v.Type == ErrorTypeRequired:
+		s = v.Type.String()
+	case v.Type == ErrorTypeForbidden:
+		s = v.Type.String()
+	case v.Type == ErrorTypeTooLong:
+		s = v.Type.String()
+	case v.Type == ErrorTypeInternal:
+		s = v.Type.String()
+	case v.BadValue == omitValue:
+		s = v.Type.String()
+	default:
+		value := v.BadValue
+		valueType := reflect.TypeOf(value)
+		if value == nil || valueType == nil {
+			value = "null"
+		} else if valueType.Kind() == reflect.Pointer {
+			if reflectValue := reflect.ValueOf(value); reflectValue.IsNil() {
+				value = "null"
+			} else {
+				value = reflectValue.Elem().Interface()
+			}
 		}
-		switch t := e.BadValue.(type) {
+		switch t := value.(type) {
 		case int64, int32, float64, float32, bool:
 			// use simple printer for simple types
-			s = fmt.Sprintf("%s: %v", e.Type, t)
+			s = fmt.Sprintf("%s: %v", v.Type, value)
 		case string:
-			s = fmt.Sprintf("%s: %q", e.Type, t)
+			s = fmt.Sprintf("%s: %q", v.Type, t)
+		case fmt.Stringer:
+			// anything that defines String() is better than raw struct
+			s = fmt.Sprintf("%s: %s", v.Type, t.String())
 		default:
-			// use more complex techniques to render more complex types
-			valstr := ""
-			jb, err := json.Marshal(e.BadValue)
-			if err == nil {
-				// best case
-				valstr = string(jb)
-			} else if stringer, ok := e.BadValue.(fmt.Stringer); ok {
-				// anything that defines String() is better than raw struct
-				valstr = stringer.String()
-			} else {
-				// worst case - fallback to raw struct
-				// TODO: internal types have panic guards against json.Marshalling to prevent
-				// accidental use of internal types in external serialized form.  For now, use
-				// %#v, although it would be better to show a more expressive output in the future
-				valstr = fmt.Sprintf("%#v", e.BadValue)
-			}
-			s = fmt.Sprintf("%s: %s", e.Type, valstr)
+			// fallback to raw struct
+			// TODO: internal types have panic guards against json.Marshalling to prevent
+			// accidental use of internal types in external serialized form.  For now, use
+			// %#v, although it would be better to show a more expressive output in the future
+			s = fmt.Sprintf("%s: %#v", v.Type, value)
 		}
-	default:
-		internal := InternalError(nil, fmt.Errorf("unhandled error code: %s: please report this", e.Type))
-		s = internal.ErrorBody()
 	}
-	if len(e.Detail) != 0 {
-		s += fmt.Sprintf(": %s", e.Detail)
+	if len(v.Detail) != 0 {
+		s += fmt.Sprintf(": %s", v.Detail)
 	}
-
 	return s
-}
-
-// WithOrigin adds origin information to the FieldError
-func (e *Error) WithOrigin(o string) *Error {
-	e.Origin = o
-	return e
-}
-
-// MarkCoveredByDeclarative marks the error as covered by declarative validation.
-func (e *Error) MarkCoveredByDeclarative() *Error {
-	e.CoveredByDeclarative = true
-	return e
 }
 
 // ErrorType is a machine readable value providing more detail about why
@@ -201,18 +132,11 @@ const (
 	// report that a given list has too many items. This is similar to FieldValueTooLong,
 	// but the error indicates quantity instead of length.
 	ErrorTypeTooMany ErrorType = "FieldValueTooMany"
-	// ErrorTypeTooFew is used to report "too few". This is used to
-	// report that a given list has too few items. This is similar to FieldValueTooLong,
-	// but the error indicates quantity instead of length.
-	ErrorTypeTooFew ErrorType = "FieldValueTooFew"
 	// ErrorTypeInternal is used to report other errors that are not related
 	// to user input.  See InternalError().
 	ErrorTypeInternal ErrorType = "InternalError"
 	// ErrorTypeTypeInvalid is for the value did not match the schema type for that field
 	ErrorTypeTypeInvalid ErrorType = "FieldValueTypeInvalid"
-	// ErrorTypeTooShort is used to report that the given value is too short.
-	// This is similar to ErrorTypeInvalid. See TooShort().
-	ErrorTypeTooShort ErrorType = "FieldValueTooShort"
 )
 
 // String converts a ErrorType into its corresponding canonical error message.
@@ -234,71 +158,43 @@ func (t ErrorType) String() string {
 		return "Too long"
 	case ErrorTypeTooMany:
 		return "Too many"
-	case ErrorTypeTooFew:
-		return "Too few"
 	case ErrorTypeInternal:
 		return "Internal error"
 	case ErrorTypeTypeInvalid:
 		return "Invalid value"
-	case ErrorTypeTooShort:
-		return "Too short"
 	default:
-		return fmt.Sprintf("<unknown error %q>", string(t))
+		panic(fmt.Sprintf("unrecognized validation error: %q", string(t)))
 	}
 }
 
 // TypeInvalid returns a *Error indicating "type is invalid"
 func TypeInvalid(field *Path, value interface{}, detail string) *Error {
-	return &Error{
-		Type:     ErrorTypeTypeInvalid,
-		Field:    field.String(),
-		BadValue: value,
-		Detail:   detail,
-	}
+	return &Error{ErrorTypeTypeInvalid, field.String(), value, detail}
 }
 
 // NotFound returns a *Error indicating "value not found".  This is
 // used to report failure to find a requested value (e.g. looking up an ID).
 func NotFound(field *Path, value interface{}) *Error {
-	return &Error{
-		Type:     ErrorTypeNotFound,
-		Field:    field.String(),
-		BadValue: value,
-	}
+	return &Error{ErrorTypeNotFound, field.String(), value, ""}
 }
 
 // Required returns a *Error indicating "value required".  This is used
 // to report required values that are not provided (e.g. empty strings, null
 // values, or empty arrays).
 func Required(field *Path, detail string) *Error {
-	return &Error{
-		Type:     ErrorTypeRequired,
-		Field:    field.String(),
-		Detail:   detail,
-		BadValue: "",
-	}
+	return &Error{ErrorTypeRequired, field.String(), "", detail}
 }
 
 // Duplicate returns a *Error indicating "duplicate value".  This is
 // used to report collisions of values that must be unique (e.g. names or IDs).
 func Duplicate(field *Path, value interface{}) *Error {
-	return &Error{
-		Type:     ErrorTypeDuplicate,
-		Field:    field.String(),
-		BadValue: value,
-	}
+	return &Error{ErrorTypeDuplicate, field.String(), value, ""}
 }
 
 // Invalid returns a *Error indicating "invalid value".  This is used
 // to report malformed values (e.g. failed regex match, too long, out of bounds).
 func Invalid(field *Path, value interface{}, detail string) *Error {
-	return &Error{
-		Type:     ErrorTypeInvalid,
-		Field:    field.String(),
-		BadValue: value,
-		Detail:   detail,
-	}
-
+	return &Error{ErrorTypeInvalid, field.String(), value, detail}
 }
 
 // NotSupported returns a *Error indicating "unsupported value".
@@ -313,12 +209,7 @@ func NotSupported[T ~string](field *Path, value interface{}, validValues []T) *E
 		}
 		detail = "supported values: " + strings.Join(quotedValues, ", ")
 	}
-	return &Error{
-		Type:     ErrorTypeNotSupported,
-		Field:    field.String(),
-		BadValue: value,
-		Detail:   detail,
-	}
+	return &Error{ErrorTypeNotSupported, field.String(), value, detail}
 }
 
 // Forbidden returns a *Error indicating "forbidden".  This is used to
@@ -326,58 +217,21 @@ func NotSupported[T ~string](field *Path, value interface{}, validValues []T) *E
 // some conditions, but which are not permitted by current conditions (e.g.
 // security policy).
 func Forbidden(field *Path, detail string) *Error {
-	return &Error{
-		Type:     ErrorTypeForbidden,
-		Field:    field.String(),
-		Detail:   detail,
-		BadValue: "",
-	}
+	return &Error{ErrorTypeForbidden, field.String(), "", detail}
 }
 
 // TooLong returns a *Error indicating "too long".  This is used to report that
 // the given value is too long.  This is similar to Invalid, but the returned
 // error will not include the too-long value. If maxLength is negative, it will
 // be included in the message.  The value argument is not used.
-func TooLong(field *Path, _ interface{}, maxLength int) *Error {
+func TooLong(field *Path, value interface{}, maxLength int) *Error {
 	var msg string
 	if maxLength >= 0 {
-		bs := "bytes"
-		if maxLength == 1 {
-			bs = "byte"
-		}
-		msg = fmt.Sprintf("may not be more than %d %s", maxLength, bs)
+		msg = fmt.Sprintf("may not be more than %d bytes", maxLength)
 	} else {
 		msg = "value is too long"
 	}
-	return &Error{
-		Type:     ErrorTypeTooLong,
-		Field:    field.String(),
-		BadValue: "<value omitted>",
-		Detail:   msg,
-	}
-}
-
-// TooLongCharacters returns a *Error indicating "too long".  This is used to report that
-// the given value is too long in characters (including multi-byte characters).
-// This is similar to Invalid, but the returned  error will not include the too-long value.
-// If maxLength is negative, it will be included in the message. The value argument is not used.
-func TooLongCharacters[T ~string](field *Path, _ T, maxLength int) *Error {
-	var msg string
-	if maxLength >= 0 {
-		bs := "characters"
-		if maxLength == 1 {
-			bs = "character"
-		}
-		msg = fmt.Sprintf("may not be more than %d %s", maxLength, bs)
-	} else {
-		msg = "value is too long"
-	}
-	return &Error{
-		Type:     ErrorTypeTooLong,
-		Field:    field.String(),
-		BadValue: "<value omitted>",
-		Detail:   msg,
-	}
+	return &Error{ErrorTypeTooLong, field.String(), "<value omitted>", msg}
 }
 
 // TooLongMaxLength returns a *Error indicating "too long".
@@ -393,11 +247,7 @@ func TooMany(field *Path, actualQuantity, maxQuantity int) *Error {
 	var msg string
 
 	if maxQuantity >= 0 {
-		is := "items"
-		if maxQuantity == 1 {
-			is = "item"
-		}
-		msg = fmt.Sprintf("must have at most %d %s", maxQuantity, is)
+		msg = fmt.Sprintf("must have at most %d items", maxQuantity)
 	} else {
 		msg = "has too many items"
 	}
@@ -409,46 +259,14 @@ func TooMany(field *Path, actualQuantity, maxQuantity int) *Error {
 		actual = omitValue
 	}
 
-	return &Error{
-		Type:     ErrorTypeTooMany,
-		Field:    field.String(),
-		BadValue: actual,
-		Detail:   msg,
-	}
+	return &Error{ErrorTypeTooMany, field.String(), actual, msg}
 }
 
 // InternalError returns a *Error indicating "internal error".  This is used
 // to signal that an error was found that was not directly related to user
 // input.  The err argument must be non-nil.
 func InternalError(field *Path, err error) *Error {
-	return &Error{
-		Type:     ErrorTypeInternal,
-		Field:    field.String(),
-		BadValue: err,
-		Detail:   err.Error(),
-	}
-}
-
-// TooShort returns a *Error indicating "too short".  This is used to report that
-// the given value is too short in characters. This is similar to Invalid.
-// If minLength is non-negative, it will  be included in the message.
-func TooShort[T ~string](field *Path, value T, minLength int) *Error {
-	var msg string
-	if minLength >= 0 {
-		bs := "characters"
-		if minLength == 1 {
-			bs = "character"
-		}
-		msg = fmt.Sprintf("must be at least %d %s", minLength, bs)
-	} else {
-		msg = "value is too short"
-	}
-	return &Error{
-		Type:     ErrorTypeTooShort,
-		Field:    field.String(),
-		BadValue: value,
-		Detail:   msg,
-	}
+	return &Error{ErrorTypeInternal, field.String(), nil, err.Error()}
 }
 
 // ErrorList holds a set of Errors.  It is plausible that we might one day have
@@ -465,30 +283,6 @@ func NewErrorTypeMatcher(t ErrorType) utilerrors.Matcher {
 		}
 		return false
 	}
-}
-
-// WithOrigin sets the origin for all errors in the list and returns the updated list.
-func (list ErrorList) WithOrigin(origin string) ErrorList {
-	for _, err := range list {
-		err.Origin = origin
-	}
-	return list
-}
-
-// MarkCoveredByDeclarative marks all errors in the list as covered by declarative validation.
-func (list ErrorList) MarkCoveredByDeclarative() ErrorList {
-	for _, err := range list {
-		err.CoveredByDeclarative = true
-	}
-	return list
-}
-
-// PrefixDetail adds a prefix to the Detail for all errors in the list and returns the updated list.
-func (list ErrorList) PrefixDetail(prefix string) ErrorList {
-	for _, err := range list {
-		err.Detail = prefix + err.Detail
-	}
-	return list
 }
 
 // ToAggregate converts the ErrorList into an errors.Aggregate.
@@ -526,90 +320,4 @@ func (list ErrorList) Filter(fns ...utilerrors.Matcher) ErrorList {
 	}
 	// FilterOut takes an Aggregate and returns an Aggregate
 	return fromAggregate(err.(utilerrors.Aggregate))
-}
-
-// ExtractCoveredByDeclarative returns a new ErrorList containing only the errors that should be covered by declarative validation.
-func (list ErrorList) ExtractCoveredByDeclarative() ErrorList {
-	newList := ErrorList{}
-	for _, err := range list {
-		if err.CoveredByDeclarative {
-			newList = append(newList, err)
-		}
-	}
-	return newList
-}
-
-// MarkAlpha marks the error as an alpha validation error.
-func (e *Error) MarkAlpha() *Error {
-	e.ValidationStabilityLevel = stabilityLevelAlpha
-	return e
-}
-
-// MarkAlpha marks the errors as alpha validation errors.
-func (list ErrorList) MarkAlpha() ErrorList {
-	for _, err := range list {
-		err.ValidationStabilityLevel = stabilityLevelAlpha
-	}
-	return list
-}
-
-// MarkBeta marks the error as a beta validation error.
-func (e *Error) MarkBeta() *Error {
-	e.ValidationStabilityLevel = stabilityLevelBeta
-	return e
-}
-
-// MarkBeta marks the errors as beta validation errors.
-func (list ErrorList) MarkBeta() ErrorList {
-	for _, err := range list {
-		err.ValidationStabilityLevel = stabilityLevelBeta
-	}
-	return list
-}
-
-func (e *Error) MarkFromImperative() *Error {
-	e.FromImperative = true
-	return e
-}
-
-func (list ErrorList) MarkFromImperative() ErrorList {
-	for _, err := range list {
-		err.FromImperative = true
-	}
-	return list
-}
-
-// RemoveCoveredByDeclarative returns a new ErrorList containing only the errors that should not be covered by declarative validation.
-func (list ErrorList) RemoveCoveredByDeclarative() ErrorList {
-	newList := ErrorList{}
-	for _, err := range list {
-		if !err.CoveredByDeclarative {
-			newList = append(newList, err)
-		}
-	}
-	return newList
-}
-
-// TooFew returns a *Error indicating "too few". This is used to
-// report that a given list has too few items. This is similar to TooLong,
-// but the returned error indicates quantity instead of length.
-func TooFew(field *Path, actualQuantity, minQuantity int) *Error {
-	var msg string
-
-	if minQuantity >= 0 {
-		is := "items"
-		if minQuantity == 1 {
-			is = "item"
-		}
-		msg = fmt.Sprintf("must have at least %d %s", minQuantity, is)
-	} else {
-		msg = "has too few items"
-	}
-
-	return &Error{
-		Type:     ErrorTypeTooFew,
-		Field:    field.String(),
-		BadValue: actualQuantity,
-		Detail:   msg,
-	}
 }

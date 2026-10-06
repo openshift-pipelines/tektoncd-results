@@ -131,7 +131,7 @@ func MakeTaskRunStatus(ctx context.Context, logger *zap.SugaredLogger, tr v1.Tas
 	// are completed before considering the taskRun complete, in addition to the regular containers.
 	// This is because sidecars in Kubernetes can keep running after the main containers complete.
 	if config.FromContextOrDefaults(ctx).FeatureFlags.EnableKubernetesSidecar {
-		complete = complete && areInitContainersDone(ctx, pod)
+		complete = complete && areInitContainersCompleted(ctx, pod)
 	}
 
 	if complete {
@@ -268,15 +268,8 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 		}
 	}
 
-	// Build a lookup map for step state provenances.
-	stepStateProvenances := make(map[string]*v1.Provenance)
-	for _, ss := range trs.Steps {
-		stepStateProvenances[ss.Name] = ss.Provenance
-	}
-
 	// Continue with extraction of termination messages
-	orderedStepStates := make([]v1.StepState, len(stepStatuses))
-	for i, s := range stepStatuses {
+	for _, s := range stepStatuses {
 		// Avoid changing the original value by modifying the pointer value.
 		state := s.State.DeepCopy()
 		taskRunStepResults := []v1.TaskRunStepResult{}
@@ -385,13 +378,18 @@ func setTaskRunStatusBasedOnStepStatus(ctx context.Context, logger *zap.SugaredL
 			Inputs:            sas.Inputs,
 			Outputs:           sas.Outputs,
 		}
-		if stepStateProvenance, exist := stepStateProvenances[stepState.Name]; exist {
-			stepState.Provenance = stepStateProvenance
+		foundStep := false
+		for i, ss := range trs.Steps {
+			if ss.Name == stepState.Name {
+				stepState.Provenance = ss.Provenance
+				trs.Steps[i] = stepState
+				foundStep = true
+				break
+			}
 		}
-		orderedStepStates[i] = stepState
-	}
-	if len(orderedStepStates) > 0 {
-		trs.Steps = orderedStepStates
+		if !foundStep {
+			trs.Steps = append(trs.Steps, stepState)
+		}
 	}
 
 	return errors.Join(errs...)
@@ -611,8 +609,7 @@ func updateCompletedTaskRunStatus(logger *zap.SugaredLogger, trs *v1.TaskRunStat
 		if onError == v1.PipelineTaskContinue {
 			markStatusFailure(trs, v1.TaskRunReasonFailureIgnored.String(), msg)
 		} else {
-			reason := getFailureReason(pod).String()
-			markStatusFailure(trs, reason, msg)
+			markStatusFailure(trs, v1.TaskRunReasonFailed.String(), msg)
 		}
 	} else {
 		markStatusSuccess(trs)
@@ -710,14 +707,8 @@ func isMatchingAnyFilter(name string, filters []containerNameFilter) bool {
 	return false
 }
 
-// areInitContainersDone returns true if all init containers in the pod are
-// done — either terminated normally or stopped because the pod failed.
-// When the pod has failed (e.g. an init container was OOMKilled), nothing
-// else will run, so there is nothing left to wait for.
-func areInitContainersDone(ctx context.Context, pod *corev1.Pod) bool {
-	if pod.Status.Phase == corev1.PodFailed {
-		return true
-	}
+// areInitContainersCompleted returns true if all init containers in the pod are completed.
+func areInitContainersCompleted(ctx context.Context, pod *corev1.Pod) bool {
 	if len(pod.Status.InitContainerStatuses) == 0 ||
 		!(pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded) {
 		return false
@@ -759,130 +750,6 @@ func checkContainersCompleted(pod *corev1.Pod, nameFilters []containerNameFilter
 	return true
 }
 
-// failureInfo holds the classified failure reason and the container that
-// caused it. This ensures getFailureMessage always describes the same
-// container that getFailureReason classified.
-type failureInfo struct {
-	reason    v1.TaskRunReason
-	container *corev1.ContainerStatus
-	isInit    bool // true when the failing container is an init container
-}
-
-// getFailureInfo classifies the pod failure and returns both a specific
-// TaskRunReason and the container that caused it.
-// This surfaces meaningful failure reasons instead of the generic "Failed"
-// for all failure types.
-// See https://github.com/tektoncd/pipeline/issues/7396
-//
-// Precondition: DidTaskRunFail(pod) returned true.
-// This is guaranteed because init container failures and sidecar OOM
-// cause Kubernetes to set pod.Status.Phase = PodFailed.
-//
-// Priority order (sidecar failures surface before step failures
-// because a crashed sidecar is likely the root cause):
-//  1. PodEvicted            - pod-level eviction (ephemeral storage, node pressure)
-//  2. InitContainerOOM      - internal Tekton init container OOMKilled
-//  3. InitContainerFailed   - internal Tekton init container failed (non-OOM)
-//  4. SidecarOOM            - sidecar OOMKilled (init or regular container)
-//  5. StepOOM               - step OOMKilled
-//  6. SidecarFailed         - sidecar failed non-OOM (init or regular container)
-//  7. StepFailed            - step failed non-OOM
-//  8. Failed                - generic fallthrough (unknown)
-func getFailureInfo(pod *corev1.Pod) failureInfo {
-	// Check pod-level eviction first, this is authoritative.
-	if pod.Status.Reason == evicted {
-		return failureInfo{reason: v1.TaskRunReasonPodEvicted}
-	}
-
-	// Check init containers. Init containers include native sidecars
-	// (sidecar-*, with restartPolicy: Always) and internal Tekton
-	// containers (prepare, place-scripts, working-dir-initializer).
-	// Note: steps are regular containers, not init containers.
-	//
-	// Priority is enforced via separate passes (not index order):
-	// SidecarOOM > InitContainerOOM > SidecarFailed > InitContainerFailed
-	for i, s := range pod.Status.InitContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if isOOMKilled(s) && IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonSidecarOOM, container: &pod.Status.InitContainerStatuses[i], isInit: true}
-		}
-	}
-	for i, s := range pod.Status.InitContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if isOOMKilled(s) && !IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonInitContainerOOM, container: &pod.Status.InitContainerStatuses[i], isInit: true}
-		}
-	}
-	for i, s := range pod.Status.InitContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if s.State.Terminated.ExitCode != 0 && IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonSidecarFailed, container: &pod.Status.InitContainerStatuses[i], isInit: true}
-		}
-	}
-	for i, s := range pod.Status.InitContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if s.State.Terminated.ExitCode != 0 && !IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonInitContainerFailed, container: &pod.Status.InitContainerStatuses[i], isInit: true}
-		}
-	}
-
-	// Check regular containers. Steps and sidecars run in parallel here,
-	// so OOM is checked across all containers first (likely root cause),
-	// then sidecar failures before step failures.
-	//
-	// Sidecar OOM has higher priority than step OOM, so scan for
-	// sidecar OOM first, then step OOM in a separate loop.
-	for i, s := range pod.Status.ContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if isOOMKilled(s) && IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonSidecarOOM, container: &pod.Status.ContainerStatuses[i]}
-		}
-	}
-	for i, s := range pod.Status.ContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if isOOMKilled(s) && IsContainerStep(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonStepOOM, container: &pod.Status.ContainerStatuses[i]}
-		}
-	}
-	for i, s := range pod.Status.ContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if s.State.Terminated.ExitCode != 0 && IsContainerSidecar(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonSidecarFailed, container: &pod.Status.ContainerStatuses[i]}
-		}
-	}
-	for i, s := range pod.Status.ContainerStatuses {
-		if s.State.Terminated == nil {
-			continue
-		}
-		if s.State.Terminated.ExitCode != 0 && IsContainerStep(s.Name) {
-			return failureInfo{reason: v1.TaskRunReasonStepFailed, container: &pod.Status.ContainerStatuses[i]}
-		}
-	}
-
-	// Default: generic failure (internal init container crash or unknown).
-	return failureInfo{reason: v1.TaskRunReasonFailed}
-}
-
-// getFailureReason classifies the pod failure and returns a specific
-// TaskRunReason. Delegates to getFailureInfo.
-func getFailureReason(pod *corev1.Pod) v1.TaskRunReason {
-	return getFailureInfo(pod).reason
-}
-
 func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
 	// If a pod was evicted, use the pods status message before trying to
 	// determine a failure message from the pod's container statuses. A
@@ -892,27 +759,26 @@ func getFailureMessage(logger *zap.SugaredLogger, pod *corev1.Pod) string {
 		return pod.Status.Message
 	}
 
-	// Use getFailureInfo to identify the specific container that caused
-	// the failure, ensuring the message describes the same container as
-	// the reason classification.
-	info := getFailureInfo(pod)
-	if info.container != nil {
-		if msg := extractContainerFailureMessage(logger, *info.container, pod.ObjectMeta); len(msg) > 0 {
-			if info.isInit {
-				return "init container failed, " + msg
-			}
-			return msg
+	// First, try to surface an error about the actual init container that failed.
+	for _, status := range pod.Status.InitContainerStatuses {
+		if msg := extractContainerFailureMessage(logger, status, pod.ObjectMeta); len(msg) > 0 {
+			return "init container failed, " + msg
 		}
 	}
 
+	// Next, try to surface an error about the actual build step that failed.
+	for _, status := range pod.Status.ContainerStatuses {
+		if msg := extractContainerFailureMessage(logger, status, pod.ObjectMeta); len(msg) > 0 {
+			return msg
+		}
+	}
 	// Next, return the Pod's status message if it has one.
 	if pod.Status.Message != "" {
 		return pod.Status.Message
 	}
 
-	// OOM fallback: check both steps and sidecars for OOMKilled.
 	for _, s := range pod.Status.ContainerStatuses {
-		if IsContainerStep(s.Name) || IsContainerSidecar(s.Name) {
+		if IsContainerStep(s.Name) {
 			if s.State.Terminated != nil {
 				if isOOMKilled(s) {
 					return oomKilled
@@ -959,43 +825,28 @@ func IsPodExceedingNodeResources(pod *corev1.Pod) bool {
 	return false
 }
 
-// hasContainerWaitingReason checks if any container (init or regular) is waiting with a reason
-// that matches the provided predicate function
-func hasContainerWaitingReason(pod *corev1.Pod, predicate func(corev1.ContainerStateWaiting) bool) bool {
-	// Check init containers first
-	for _, containerStatus := range pod.Status.InitContainerStatuses {
-		if containerStatus.State.Waiting != nil && predicate(*containerStatus.State.Waiting) {
-			return true
-		}
-	}
-	// Check regular containers
+// isPodHitConfigError returns true if the Pod's status undicates there are config error raised
+func isPodHitConfigError(pod *corev1.Pod) bool {
 	for _, containerStatus := range pod.Status.ContainerStatuses {
-		if containerStatus.State.Waiting != nil && predicate(*containerStatus.State.Waiting) {
+		if containerStatus.State.Waiting != nil && containerStatus.State.Waiting.Reason == ReasonCreateContainerConfigError {
+			// for subPath directory creation errors, we want to allow recovery
+			if strings.Contains(containerStatus.State.Waiting.Message, "failed to create subPath directory") {
+				return false
+			}
 			return true
 		}
 	}
 	return false
 }
 
-// isPodHitConfigError returns true if the Pod's status indicates there are config error raised
-func isPodHitConfigError(pod *corev1.Pod) bool {
-	return hasContainerWaitingReason(pod, func(waiting corev1.ContainerStateWaiting) bool {
-		if waiting.Reason != ReasonCreateContainerConfigError {
-			return false
-		}
-		// for subPath directory creation errors, we want to allow recovery
-		if strings.Contains(waiting.Message, "failed to create subPath directory") {
-			return false
-		}
-		return true
-	})
-}
-
 // isPullImageError returns true if the Pod's status indicates there are any error when pulling image
 func isPullImageError(pod *corev1.Pod) bool {
-	return hasContainerWaitingReason(pod, func(waiting corev1.ContainerStateWaiting) bool {
-		return isImageErrorReason(waiting.Reason)
-	})
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.State.Waiting != nil && isImageErrorReason(containerStatus.State.Waiting.Reason) {
+			return true
+		}
+	}
+	return false
 }
 
 func isImageErrorReason(reason string) bool {
