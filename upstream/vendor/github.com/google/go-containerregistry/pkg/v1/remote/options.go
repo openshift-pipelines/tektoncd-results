@@ -45,7 +45,6 @@ type options struct {
 	retryBackoff                   Backoff
 	retryPredicate                 retry.Predicate
 	retryStatusCodes               []int
-	limiter                        *pullLimiter
 
 	// Only these options can overwrite Reuse()d options.
 	platform v1.Platform
@@ -93,7 +92,6 @@ var fastBackoff = Backoff{
 
 var defaultRetryStatusCodes = []int{
 	http.StatusRequestTimeout,
-	http.StatusTooManyRequests, // 429: OCI distribution-spec rate limit; TooManyRequestsErrorCode is already classified temporary in transport/error.go
 	http.StatusInternalServerError,
 	http.StatusBadGateway,
 	http.StatusServiceUnavailable,
@@ -144,7 +142,6 @@ func makeOptions(opts ...Option) (*options, error) {
 			return nil, err
 		}
 	}
-	o.limiter = newPullLimiter(o.jobs)
 
 	switch {
 	case o.auth != nil && o.keychain != nil:
@@ -165,14 +162,9 @@ func makeOptions(opts ...Option) (*options, error) {
 			o.transport = transport.NewLogger(o.transport)
 		}
 
-		// Using customized retry predicate if provided, and fallback to default if not.
-		predicate := o.retryPredicate
-		if predicate == nil {
-			predicate = defaultRetryPredicate
-		}
-
 		// Wrap the transport in something that can retry network flakes.
-		o.transport = transport.NewRetry(o.transport, transport.WithRetryBackoff(o.retryBackoff), transport.WithRetryPredicate(predicate), transport.WithRetryStatusCodes(o.retryStatusCodes...))
+		o.transport = transport.NewRetry(o.transport, transport.WithRetryPredicate(defaultRetryPredicate), transport.WithRetryStatusCodes(o.retryStatusCodes...))
+
 		// Wrap this last to prevent transport.New from double-wrapping.
 		if o.userAgent != "" {
 			o.transport = transport.NewUserAgent(o.transport, o.userAgent)

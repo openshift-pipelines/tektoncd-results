@@ -14,7 +14,6 @@ import (
 	internalendpoints "github.com/aws/aws-sdk-go-v2/service/ecr/internal/endpoints"
 	smithyauth "github.com/aws/smithy-go/auth"
 	smithyendpoints "github.com/aws/smithy-go/endpoints"
-	"github.com/aws/smithy-go/endpoints/private/rulesfn"
 	"github.com/aws/smithy-go/middleware"
 	"github.com/aws/smithy-go/ptr"
 	"github.com/aws/smithy-go/tracing"
@@ -218,20 +217,24 @@ func resolveBaseEndpoint(cfg aws.Config, o *Options) {
 	}
 }
 
-func bindRegion(region string) (*string, error) {
+func bindRegion(region string) *string {
 	if region == "" {
-		return nil, nil
+		return nil
 	}
-	if !rulesfn.IsValidHostLabel(region, true) {
-		return nil, fmt.Errorf("invalid input region %s", region)
-	}
-
-	return aws.String(endpoints.MapFIPSRegion(region)), nil
+	return aws.String(endpoints.MapFIPSRegion(region))
 }
 
 // EndpointParameters provides the parameters that influence how endpoints are
 // resolved.
 type EndpointParameters struct {
+	// The AWS region used to dispatch the request.
+	//
+	// Parameter is
+	// required.
+	//
+	// AWS::Region
+	Region *string
+
 	// When true, use the dual-stack endpoint. If the configured endpoint does not
 	// support dual-stack, dispatching the request MAY return an error.
 	//
@@ -258,14 +261,6 @@ type EndpointParameters struct {
 	//
 	// SDK::Endpoint
 	Endpoint *string
-
-	// The AWS region used to dispatch the request.
-	//
-	// Parameter is
-	// required.
-	//
-	// AWS::Region
-	Region *string
 }
 
 // ValidateRequired validates required parameters are set.
@@ -333,9 +328,7 @@ func (r *resolver) ResolveEndpoint(
 		return endpoint, fmt.Errorf("endpoint parameters are not valid, %w", err)
 	}
 	_UseDualStack := *params.UseDualStack
-	_ = _UseDualStack
 	_UseFIPS := *params.UseFIPS
-	_ = _UseFIPS
 
 	if exprVal := params.Endpoint; exprVal != nil {
 		_Endpoint := *exprVal
@@ -364,774 +357,6 @@ func (r *resolver) ResolveEndpoint(
 		if exprVal := awsrulesfn.GetPartition(_Region); exprVal != nil {
 			_PartitionResult := *exprVal
 			_ = _PartitionResult
-			if _PartitionResult.Name == "aws" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-us-gov" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-us-gov" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-us-gov" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-us-gov" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-cn" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-cn" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-cn" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-cn" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-b" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-b" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-b" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-b" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-e" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-e" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-e" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-e" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-f" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-f" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-f" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-iso-f" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-eusc" {
-				if _UseFIPS == false {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-eusc" {
-				if _UseFIPS == false {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-eusc" {
-				if _UseFIPS == true {
-					if _UseDualStack == false {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
-			if _PartitionResult.Name == "aws-eusc" {
-				if _UseFIPS == true {
-					if _UseDualStack == true {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://ecr-fips.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
-
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
-					}
-				}
-			}
 			if _UseFIPS == true {
 				if _UseDualStack == true {
 					if true == _PartitionResult.SupportsFIPS {
@@ -1160,14 +385,13 @@ func (r *resolver) ResolveEndpoint(
 				}
 			}
 			if _UseFIPS == true {
-				if _UseDualStack == false {
-					if _PartitionResult.SupportsFIPS == true {
+				if _PartitionResult.SupportsFIPS == true {
+					if _PartitionResult.Name == "aws" {
 						uriString := func() string {
 							var out strings.Builder
-							out.WriteString("https://api.ecr-fips.")
+							out.WriteString("https://ecr-fips.")
 							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DnsSuffix)
+							out.WriteString(".amazonaws.com")
 							return out.String()
 						}()
 
@@ -1181,33 +405,68 @@ func (r *resolver) ResolveEndpoint(
 							Headers: http.Header{},
 						}, nil
 					}
-					return endpoint, fmt.Errorf("endpoint rule error, %s", "FIPS is enabled but this partition does not support FIPS")
+					if _PartitionResult.Name == "aws-us-gov" {
+						uriString := func() string {
+							var out strings.Builder
+							out.WriteString("https://ecr-fips.")
+							out.WriteString(_Region)
+							out.WriteString(".amazonaws.com")
+							return out.String()
+						}()
+
+						uri, err := url.Parse(uriString)
+						if err != nil {
+							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
+						}
+
+						return smithyendpoints.Endpoint{
+							URI:     *uri,
+							Headers: http.Header{},
+						}, nil
+					}
+					uriString := func() string {
+						var out strings.Builder
+						out.WriteString("https://api.ecr-fips.")
+						out.WriteString(_Region)
+						out.WriteString(".")
+						out.WriteString(_PartitionResult.DnsSuffix)
+						return out.String()
+					}()
+
+					uri, err := url.Parse(uriString)
+					if err != nil {
+						return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
+					}
+
+					return smithyendpoints.Endpoint{
+						URI:     *uri,
+						Headers: http.Header{},
+					}, nil
 				}
+				return endpoint, fmt.Errorf("endpoint rule error, %s", "FIPS is enabled but this partition does not support FIPS")
 			}
-			if _UseFIPS == false {
-				if _UseDualStack == true {
-					if true == _PartitionResult.SupportsDualStack {
-						uriString := func() string {
-							var out strings.Builder
-							out.WriteString("https://api.ecr.")
-							out.WriteString(_Region)
-							out.WriteString(".")
-							out.WriteString(_PartitionResult.DualStackDnsSuffix)
-							return out.String()
-						}()
+			if _UseDualStack == true {
+				if true == _PartitionResult.SupportsDualStack {
+					uriString := func() string {
+						var out strings.Builder
+						out.WriteString("https://api.ecr.")
+						out.WriteString(_Region)
+						out.WriteString(".")
+						out.WriteString(_PartitionResult.DualStackDnsSuffix)
+						return out.String()
+					}()
 
-						uri, err := url.Parse(uriString)
-						if err != nil {
-							return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
-						}
-
-						return smithyendpoints.Endpoint{
-							URI:     *uri,
-							Headers: http.Header{},
-						}, nil
+					uri, err := url.Parse(uriString)
+					if err != nil {
+						return endpoint, fmt.Errorf("Failed to parse uri: %s", uriString)
 					}
-					return endpoint, fmt.Errorf("endpoint rule error, %s", "DualStack is enabled but this partition does not support DualStack")
+
+					return smithyendpoints.Endpoint{
+						URI:     *uri,
+						Headers: http.Header{},
+					}, nil
 				}
+				return endpoint, fmt.Errorf("endpoint rule error, %s", "DualStack is enabled but this partition does not support DualStack")
 			}
 			uriString := func() string {
 				var out strings.Builder
@@ -1237,23 +496,19 @@ type endpointParamsBinder interface {
 	bindEndpointParams(*EndpointParameters)
 }
 
-func bindEndpointParams(ctx context.Context, input interface{}, options Options) (*EndpointParameters, error) {
+func bindEndpointParams(ctx context.Context, input interface{}, options Options) *EndpointParameters {
 	params := &EndpointParameters{}
 
+	params.Region = bindRegion(options.Region)
 	params.UseDualStack = aws.Bool(options.EndpointOptions.UseDualStackEndpoint == aws.DualStackEndpointStateEnabled)
 	params.UseFIPS = aws.Bool(options.EndpointOptions.UseFIPSEndpoint == aws.FIPSEndpointStateEnabled)
 	params.Endpoint = options.BaseEndpoint
-	region, err := bindRegion(options.Region)
-	if err != nil {
-		return nil, err
-	}
-	params.Region = region
 
 	if b, ok := input.(endpointParamsBinder); ok {
 		b.bindEndpointParams(params)
 	}
 
-	return params, nil
+	return params
 }
 
 type resolveEndpointV2Middleware struct {
@@ -1283,10 +538,7 @@ func (m *resolveEndpointV2Middleware) HandleFinalize(ctx context.Context, in mid
 		return out, metadata, fmt.Errorf("expected endpoint resolver to not be nil")
 	}
 
-	params, err := bindEndpointParams(ctx, getOperationInput(ctx), m.options)
-	if err != nil {
-		return out, metadata, fmt.Errorf("failed to bind endpoint params, %w", err)
-	}
+	params := bindEndpointParams(ctx, getOperationInput(ctx), m.options)
 	endpt, err := timeOperationMetric(ctx, "client.call.resolve_endpoint_duration",
 		func() (smithyendpoints.Endpoint, error) {
 			return m.options.EndpointResolverV2.ResolveEndpoint(ctx, *params)

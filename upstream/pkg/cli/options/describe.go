@@ -1,12 +1,6 @@
-// Package options provides shared option structs for CLI commands.
 package options
 
-import (
-	"github.com/tektoncd/results/pkg/cli/client"
-	"github.com/tektoncd/results/pkg/cli/common"
-)
-
-var _ common.FilterOptions = (*DescribeOptions)(nil)
+import "github.com/tektoncd/results/pkg/cli/client"
 
 // DescribeOptions contains options for describing a resource.
 type DescribeOptions struct {
@@ -39,10 +33,4 @@ func (o *DescribeOptions) GetResourceType() string {
 // GetUID implements FilterOptions interface
 func (o *DescribeOptions) GetUID() string {
 	return o.UID
-}
-
-// SelectsExactMatch implements FilterOptions interface.
-// Describe always uses exact match for faster server-side filtering.
-func (o *DescribeOptions) SelectsExactMatch() bool {
-	return true
 }

@@ -23,8 +23,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/google/go-cmp/cmp"
-	pipelinev1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
-	pipelinev1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/record"
 	"github.com/tektoncd/results/pkg/api/server/v1alpha2/result"
 	"github.com/tektoncd/results/pkg/watcher/convert"
@@ -106,7 +104,7 @@ func (c *Client) Put(ctx context.Context, o Object, opts ...grpc.CallOption) (*p
 // one, or updates the existing Result with new Object details if necessary.
 func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOption) (*pb.Result, error) {
 	resName := resultName(o)
-	curr, err := c.GetResult(ctx, &pb.GetResultRequest{Name: resName}, opts...)
+	curr, err := c.ResultsClient.GetResult(ctx, &pb.GetResultRequest{Name: resName}, opts...)
 	if err != nil && status.Code(err) != codes.NotFound {
 		return nil, status.Errorf(status.Code(err), "GetResult(%s): %v", resName, err)
 	}
@@ -126,8 +124,8 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 			Record:    recName,
 			Type:      convert.TypeName(o),
 			Status:    convert.Status(o.GetStatusCondition()),
-			StartTime: getStartTime(o),
-			EndTime:   getEndTime(o),
+			StartTime: getTimestamp(o.GetStatusCondition().GetCondition(apis.ConditionReady)),
+			EndTime:   getTimestamp(o.GetStatusCondition().GetCondition(apis.ConditionSucceeded)),
 		}
 	}
 
@@ -165,7 +163,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 			res.Summary.Annotations = annotations
 		}
 		// Set the Result.Summary.Labels fields if the object in question contains the required labels.
-		summaryLabels := strings.Split(c.SummaryLabels, ",")
+		summaryLabels := strings.Split(c.Config.SummaryLabels, ",")
 		if len(summaryLabels) > 0 && summaryLabels[0] != "" {
 			for _, v := range summaryLabels {
 				if value, found := o.GetLabels()[v]; found {
@@ -173,7 +171,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 				}
 			}
 		}
-		summaryAnnotations := strings.Split(c.SummaryAnnotations, ",")
+		summaryAnnotations := strings.Split(c.Config.SummaryAnnotations, ",")
 		if len(summaryAnnotations) > 0 && summaryAnnotations[0] != "" {
 			for _, v := range summaryAnnotations {
 				if value, found := o.GetLabels()[v]; found {
@@ -192,17 +190,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 			Parent: parentName(o),
 			Result: res,
 		}
-		created, err := c.CreateResult(ctx, req, opts...)
-		if err != nil {
-			if status.Code(err) == codes.AlreadyExists {
-				logger.Debug("Result was created concurrently - refetching")
-				return c.GetResult(ctx, &pb.GetResultRequest{
-					Name: resName,
-				}, opts...)
-			}
-			return nil, err
-		}
-		return created, nil
+		return c.ResultsClient.CreateResult(ctx, req, opts...)
 	}
 
 	// From here on, we're checking to see if there are any updates that need
@@ -226,7 +214,7 @@ func (c *Client) ensureResult(ctx context.Context, o Object, opts ...grpc.CallOp
 		Name:   resName,
 		Result: res,
 	}
-	return c.UpdateResult(ctx, req, opts...)
+	return c.ResultsClient.UpdateResult(ctx, req, opts...)
 }
 
 // parseAnnotations attempts to return the provided value as a map of strings.
@@ -248,60 +236,11 @@ func copyKeys(in, out map[string]string) {
 	}
 }
 
-// getStartTime returns the Status.StartTime of a PipelineRun, TaskRun or
-// CustomRun, or nil for any other type.
-func getStartTime(o Object) *timestamppb.Timestamp {
-	var startTime *timestamppb.Timestamp
-
-	switch obj := o.(type) {
-
-	case *pipelinev1.PipelineRun:
-		if obj.Status.StartTime != nil {
-			startTime = timestamppb.New(obj.Status.StartTime.Time)
-		}
-
-	case *pipelinev1.TaskRun:
-		if obj.Status.StartTime != nil {
-			startTime = timestamppb.New(obj.Status.StartTime.Time)
-		}
-
-	case *pipelinev1beta1.CustomRun:
-		if obj.Status.StartTime != nil {
-			startTime = timestamppb.New(obj.Status.StartTime.Time)
-		}
-
-	default:
+func getTimestamp(c *apis.Condition) *timestamppb.Timestamp {
+	if c == nil || c.IsFalse() {
 		return nil
 	}
-	return startTime
-}
-
-// getEndTime returns the Status.CompletionTime of a PipelineRun, TaskRun or
-// CustomRun, or nil for any other type.
-func getEndTime(o Object) *timestamppb.Timestamp {
-	var endTime *timestamppb.Timestamp
-
-	switch obj := o.(type) {
-
-	case *pipelinev1.PipelineRun:
-		if obj.Status.CompletionTime != nil {
-			endTime = timestamppb.New(obj.Status.CompletionTime.Time)
-		}
-
-	case *pipelinev1.TaskRun:
-		if obj.Status.CompletionTime != nil {
-			endTime = timestamppb.New(obj.Status.CompletionTime.Time)
-		}
-
-	case *pipelinev1beta1.CustomRun:
-		if obj.Status.CompletionTime != nil {
-			endTime = timestamppb.New(obj.Status.CompletionTime.Time)
-		}
-
-	default:
-		return nil
-	}
-	return endTime
+	return timestamppb.New(c.LastTransitionTime.Inner.Time)
 }
 
 // resultName gets the result name to use for the given object.

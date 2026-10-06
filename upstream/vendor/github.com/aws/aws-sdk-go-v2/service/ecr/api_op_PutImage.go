@@ -55,7 +55,9 @@ type PutImageInput struct {
 	// the request.
 	ImageManifestMediaType *string
 
-	// The tag to associate with the image. This parameter is optional.
+	// The tag to associate with the image. This parameter is required for images that
+	// use the Docker Image Manifest V2 Schema 2 or Open Container Initiative (OCI)
+	// formats.
 	ImageTag *string
 
 	// The Amazon Web Services account ID associated with the registry that contains
@@ -141,9 +143,6 @@ func (c *Client) addOperationPutImageMiddlewares(stack *middleware.Stack, option
 	if err = addUserAgentRetryMode(stack, options); err != nil {
 		return err
 	}
-	if err = addCredentialSource(stack, options); err != nil {
-		return err
-	}
 	if err = addOpPutImageValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -165,13 +164,16 @@ func (c *Client) addOperationPutImageMiddlewares(stack *middleware.Stack, option
 	if err = addDisableHTTPSMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = addInterceptBeforeRetryLoop(stack, options); err != nil {
+	if err = addSpanInitializeStart(stack); err != nil {
 		return err
 	}
-	if err = addInterceptAttempt(stack, options); err != nil {
+	if err = addSpanInitializeEnd(stack); err != nil {
 		return err
 	}
-	if err = addInterceptors(stack, options); err != nil {
+	if err = addSpanBuildRequestStart(stack); err != nil {
+		return err
+	}
+	if err = addSpanBuildRequestEnd(stack); err != nil {
 		return err
 	}
 	return nil

@@ -22,9 +22,8 @@ import (
 // Command returns a cobra command for `logs` sub commands
 func Command(params *flags.Params) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:        "logs [command]",
-		Short:      "[DEPRECATED] Commands for finding and retrieving logs",
-		Deprecated: "use 'pipelinerun logs' or 'taskrun logs' commands to retrieve logs",
+		Use:   "logs",
+		Short: "[To be deprecated] Commands for finding and retrieving logs",
 		Annotations: map[string]string{
 			"commandType": "main",
 		},

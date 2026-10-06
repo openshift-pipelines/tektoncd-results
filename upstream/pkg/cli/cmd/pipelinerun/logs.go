@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"github.com/tektoncd/results/pkg/cli/options"
@@ -13,6 +14,7 @@ import (
 	"github.com/tektoncd/results/pkg/cli/client/logs"
 	"github.com/tektoncd/results/pkg/cli/client/records"
 	"github.com/tektoncd/results/pkg/cli/common"
+	"github.com/tektoncd/results/pkg/cli/common/prerun"
 	pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 )
 
@@ -37,9 +39,6 @@ Get logs for a PipelineRun by UID if there are multiple PipelineRuns with the sa
 		Short: "Get logs for a PipelineRun",
 		Long: `Get logs for a PipelineRun by name or UID. If --uid is provided, the PipelineRun name is optional.
 
-If multiple PipelineRuns match the given name, the logs for the most recent one are returned.
-Use --uid to target a specific PipelineRun when needed.
-
 NOTE:
 Logs are not supported for the system namespace or for the default namespace used by LokiStack.
 Additionally, PipelineRun logs are not supported for S3 log storage.
@@ -59,9 +58,13 @@ Logs are only available for completed PipelineRuns. Running PipelineRuns do not 
 			}
 			return nil
 		},
-		PreRunE: func(_ *cobra.Command, args []string) error {
+		PreRunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize the client using the shared prerun function
-			opts.Client = p.RESTClient()
+			var err error
+			opts.Client, err = prerun.InitClient(p, cmd)
+			if err != nil {
+				return err
+			}
 			if len(args) > 0 {
 				opts.ResourceName = args[0]
 			}
@@ -69,54 +72,46 @@ Logs are only available for completed PipelineRuns. Running PipelineRuns do not 
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+
+			// Build filter string to find the PipelineRun
+			filter := common.BuildFilterString(opts)
+
+			// Handle namespace
+			parent := fmt.Sprintf("%s/results/-", p.Namespace())
+
+			// Create record client
 			recordClient := records.NewClient(opts.Client)
 
-			var record *pb.Record
-
-			if opts.UID != "" {
-				// Direct primary key lookup by UID
-				r, err := recordClient.GetRecord(ctx, p.Namespace(), opts.UID)
-				if err == nil {
-					record = r
-				} else {
-					// Fallback: filter by record name column (text, indexed)
-					// instead of data.metadata.uid (JSONB, unindexed).
-					filter := fmt.Sprintf(`name.endsWith("records/%s")`, opts.UID)
-					parent := fmt.Sprintf("%s/results/-", p.Namespace())
-					resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
-						Parent:   parent,
-						Filter:   filter,
-						OrderBy:  "create_time desc",
-						PageSize: 5,
-					}, common.NameUIDAndDataField)
-					if err != nil {
-						return fmt.Errorf("failed to find PipelineRun: %v", err)
-					}
-					if len(resp.Records) == 0 {
-						if opts.ResourceName != "" {
-							return fmt.Errorf("no PipelineRun found with name %s and UID %s", opts.ResourceName, opts.UID)
-						}
-						return fmt.Errorf("no PipelineRun found with UID %s", opts.UID)
-					}
-					record = resp.Records[0]
-				}
-			} else {
-				filter := common.BuildFilterString(opts)
-				parent := fmt.Sprintf("%s/results/-", p.Namespace())
-				resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
-					Parent:   parent,
-					Filter:   filter,
-					OrderBy:  "create_time desc",
-					PageSize: 5,
-				}, common.NameUIDAndDataField)
-				if err != nil {
-					return fmt.Errorf("failed to find PipelineRun: %v", err)
-				}
-				if len(resp.Records) == 0 {
-					return fmt.Errorf("no PipelineRun found with name %s", opts.ResourceName)
-				}
-				record = resp.Records[0]
+			// Find the PipelineRun record
+			resp, err := recordClient.ListRecords(ctx, &pb.ListRecordsRequest{
+				Parent:   parent,
+				Filter:   filter,
+				PageSize: 25,
+			}, common.NameUIDAndDataField)
+			if err != nil {
+				return fmt.Errorf("failed to find PipelineRun: %v", err)
 			}
+			if len(resp.Records) == 0 {
+				if opts.UID != "" && opts.ResourceName != "" {
+					return fmt.Errorf("no PipelineRun found with name %s and UID %s", opts.ResourceName, opts.UID)
+				} else if opts.UID != "" {
+					return fmt.Errorf("no PipelineRun found with UID %s", opts.UID)
+				}
+				return fmt.Errorf("no PipelineRun found with name %s", opts.ResourceName)
+			}
+
+			// If multiple PipelineRuns are found, return an error
+			if len(resp.Records) > 1 {
+				var uids []string
+				for _, record := range resp.Records {
+					uids = append(uids, record.Uid)
+				}
+				return fmt.Errorf("multiple PipelineRuns found. Use a more specific name or UID. Available UIDs are: %s",
+					strings.Join(uids, ", "))
+			}
+
+			// Get the PipelineRun record
+			record := resp.Records[0]
 
 			// Check if the PipelineRun is completed before attempting to get logs
 			var pipelineRun v1.PipelineRun
@@ -145,10 +140,7 @@ Logs are only available for completed PipelineRuns. Running PipelineRuns do not 
 
 			// Close the reader if it implements io.Closer
 			if closer, ok := reader.(io.Closer); ok {
-				// Workaround for golangci-lint returned value not checked complaint
-				defer func() {
-					_ = closer.Close()
-				}()
+				defer closer.Close()
 			}
 
 			// Copy the logs to stdout

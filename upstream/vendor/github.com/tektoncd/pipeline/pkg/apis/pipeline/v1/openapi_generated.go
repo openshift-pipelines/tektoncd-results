@@ -173,13 +173,6 @@ func schema_pkg_apis_pipeline_pod_AffinityAssistantTemplate(ref common.Reference
 							Format:      "",
 						},
 					},
-					"serviceAccountName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ServiceAccountName is the name of the ServiceAccount to use for the affinity assistant pod. If not specified, the affinity assistant will inherit the serviceAccountName from the PipelineRun's taskRunTemplate. If that is also not specified, the pod will use the namespace's default ServiceAccount. More info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
 				},
 			},
 		},
@@ -414,7 +407,7 @@ func schema_pkg_apis_pipeline_v1_Artifact(ref common.ReferenceCallback) common.O
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Artifact represents an artifact within a system, potentially containing multiple values associated with it.",
+				Description: "TaskRunStepArtifact represents an artifact produced or used by a step within a task run. It directly uses the Artifact type for its structure.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"name": {
@@ -954,7 +947,7 @@ func schema_pkg_apis_pipeline_v1_ParamValue(ref common.ReferenceCallback) common
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "ParamValue is a type that can hold a single string, string array, or string map. Used in JSON unmarshalling so that a single JSON field can accept either an individual string or an array of strings.",
+				Description: "ResultValue is a type alias of ParamValue",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"Type": {
@@ -1264,7 +1257,6 @@ func schema_pkg_apis_pipeline_v1_PipelineRunList(ref common.ReferenceCallback) c
 						},
 					},
 				},
-				Required: []string{"items"},
 			},
 		},
 		Dependencies: []string{
@@ -1437,13 +1429,6 @@ func schema_pkg_apis_pipeline_v1_PipelineRunSpec(ref common.ReferenceCallback) c
 									},
 								},
 							},
-						},
-					},
-					"managedBy": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ManagedBy indicates which controller is responsible for reconciling this resource. If unset or set to \"tekton.dev/pipeline\", the default Tekton controller will manage this resource. This field is immutable.",
-							Type:        []string{"string"},
-							Format:      "",
 						},
 					},
 				},
@@ -2021,19 +2006,19 @@ func schema_pkg_apis_pipeline_v1_PipelineTask(ref common.ReferenceCallback) comm
 					},
 					"timeout": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Duration after which the TaskRun times out. Defaults to 1 hour. Refer Go's ParseDuration documentation for expected format: https://golang.org/pkg/time/#ParseDuration",
+							Description: "Time after which the TaskRun times out. Defaults to 1 hour. Refer Go's ParseDuration documentation for expected format: https://golang.org/pkg/time/#ParseDuration",
 							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Duration"),
 						},
 					},
 					"pipelineRef": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PipelineRef is a reference to a pipeline definition. This is an alpha field. You must set the \"enable-api-fields\" feature flag to \"alpha\" for this field to be supported. When enabled, the referenced Pipeline is executed as a child PipelineRun owned by the parent PipelineRun.",
+							Description: "PipelineRef is a reference to a pipeline definition Note: PipelineRef is in preview mode and not yet supported",
 							Ref:         ref("github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.PipelineRef"),
 						},
 					},
 					"pipelineSpec": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PipelineSpec is a specification of a pipeline. This is an alpha field. You must set the \"enable-api-fields\" feature flag to \"alpha\" for this field to be supported. When enabled, the embedded Pipeline is executed as a child PipelineRun owned by the parent PipelineRun. Specifying PipelineSpec can be disabled by setting `disable-inline-spec` feature flag. See Pipeline.spec (API version: tekton.dev/v1)",
+							Description: "PipelineSpec is a specification of a pipeline Note: PipelineSpec is in preview mode and not yet supported Specifying PipelineSpec can be disabled by setting `disable-inline-spec` feature flag. See Pipeline.spec (API version: tekton.dev/v1)",
 							Ref:         ref("github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.PipelineSpec"),
 						},
 					},
@@ -2213,17 +2198,11 @@ func schema_pkg_apis_pipeline_v1_PipelineTaskRunSpec(ref common.ReferenceCallbac
 							Ref:         ref("k8s.io/api/core/v1.ResourceRequirements"),
 						},
 					},
-					"timeout": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Duration after which the TaskRun times out. Overrides the timeout specified on the Task's spec if specified. Takes lower precedence to PipelineRun's `spec.timeouts.tasks` Refer Go's ParseDuration documentation for expected format: https://golang.org/pkg/time/#ParseDuration",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Duration"),
-						},
-					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/tektoncd/pipeline/pkg/apis/pipeline/pod.Template", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.PipelineTaskMetadata", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.TaskRunSidecarSpec", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.TaskRunStepSpec", "k8s.io/api/core/v1.ResourceRequirements", "k8s.io/apimachinery/pkg/apis/meta/v1.Duration"},
+			"github.com/tektoncd/pipeline/pkg/apis/pipeline/pod.Template", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.PipelineTaskMetadata", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.TaskRunSidecarSpec", "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1.TaskRunStepSpec", "k8s.io/api/core/v1.ResourceRequirements"},
 	}
 }
 
@@ -2257,7 +2236,7 @@ func schema_pkg_apis_pipeline_v1_PipelineWorkspaceDeclaration(ref common.Referen
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "PipelineWorkspaceDeclaration creates a named slot in a Pipeline that a PipelineRun is expected to populate with a workspace binding.",
+				Description: "WorkspacePipelineDeclaration creates a named slot in a Pipeline that a PipelineRun is expected to populate with a workspace binding.\n\nDeprecated: use PipelineWorkspaceDeclaration type instead",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"name": {
@@ -2885,13 +2864,6 @@ func schema_pkg_apis_pipeline_v1_Step(ref common.ReferenceCallback) common.OpenA
 						SchemaProps: spec.SchemaProps{
 							Description: "Name of the Step specified as a DNS_LABEL. Each Step in a Task must have a unique name.",
 							Default:     "",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"displayName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "DisplayName is a user-facing name of the step that may be used to populate a UI.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -3886,7 +3858,7 @@ func schema_pkg_apis_pipeline_v1_TaskRunResult(ref common.ReferenceCallback) com
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "TaskRunResult used to describe the results of a task",
+				Description: "TaskRunStepResult is a type alias of TaskRunResult",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"name": {
@@ -4088,13 +4060,6 @@ func schema_pkg_apis_pipeline_v1_TaskRunSpec(ref common.ReferenceCallback) commo
 						SchemaProps: spec.SchemaProps{
 							Description: "Compute resources to use for this TaskRun",
 							Ref:         ref("k8s.io/api/core/v1.ResourceRequirements"),
-						},
-					},
-					"managedBy": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ManagedBy indicates which controller is responsible for reconciling this resource. If unset or set to \"tekton.dev/pipeline\", the default Tekton controller will manage this resource. This field is immutable.",
-							Type:        []string{"string"},
-							Format:      "",
 						},
 					},
 				},

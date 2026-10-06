@@ -1,15 +1,13 @@
-// Package config provides configuration types for Results APIs.
 package config
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"knative.dev/pkg/observability/configmap"
+	"knative.dev/pkg/metrics"
 )
 
 const (
 	// metricsTaskrunLevel determines to what level to aggregate metrics
-	// for taskrun and customrun (both are task-level resources and share
-	// this configuration knob for brevity)
+	// for taskrun
 	metricsTaskrunLevelKey = "metrics.taskrun.level"
 
 	// metricsPipelinerunLevel determines to what level to aggregate metrics
@@ -84,7 +82,7 @@ func (cfg *Metrics) DeepCopy() *Metrics {
 // GetMetricsConfigName returns the name of the configmap containing all
 // customizations for the storage bucket.
 func GetMetricsConfigName() string {
-	return configmap.Name()
+	return metrics.ConfigMapName()
 }
 
 // Equals returns true if two Configs are identical

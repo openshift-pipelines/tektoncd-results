@@ -25,6 +25,7 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/cli/config/types"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/mitchellh/go-homedir"
 )
 
 // Resource represents a registry or repository that can be authenticated against.
@@ -94,7 +95,7 @@ func (dk *defaultKeychain) ResolveContext(_ context.Context, target Resource) (A
 
 	// First, check $HOME/.docker/config.json
 	foundDockerConfig := false
-	home, err := os.UserHomeDir()
+	home, err := homedir.Dir()
 	if err == nil {
 		foundDockerConfig = fileExists(filepath.Join(home, ".docker/config.json"))
 	}
@@ -116,8 +117,8 @@ func (dk *defaultKeychain) ResolveContext(_ context.Context, target Resource) (A
 		if err != nil {
 			return nil, err
 		}
-	} else if path := filepath.Clean(os.Getenv("REGISTRY_AUTH_FILE")); fileExists(path) {
-		f, err := os.Open(path)
+	} else if fileExists(os.Getenv("REGISTRY_AUTH_FILE")) {
+		f, err := os.Open(os.Getenv("REGISTRY_AUTH_FILE"))
 		if err != nil {
 			return nil, err
 		}
@@ -126,8 +127,8 @@ func (dk *defaultKeychain) ResolveContext(_ context.Context, target Resource) (A
 		if err != nil {
 			return nil, err
 		}
-	} else if path := filepath.Clean(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "containers/auth.json")); fileExists(path) {
-		f, err := os.Open(path)
+	} else if fileExists(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "containers/auth.json")) {
+		f, err := os.Open(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "containers/auth.json"))
 		if err != nil {
 			return nil, err
 		}

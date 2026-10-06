@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package main provides the entry point for the Results watcher.
 package main
 
 import (
@@ -31,7 +30,6 @@ import (
 
 	creds "github.com/tektoncd/results/pkg/watcher/grpc"
 	"github.com/tektoncd/results/pkg/watcher/reconciler"
-	"github.com/tektoncd/results/pkg/watcher/reconciler/customrun"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/pipelinerun"
 	"github.com/tektoncd/results/pkg/watcher/reconciler/taskrun"
 	v1alpha2pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
@@ -103,11 +101,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			log.Printf("error closing connection: %v", err)
-		}
-	}()
+	defer conn.Close()
 	results := v1alpha2pb.NewResultsClient(conn)
 
 	// Inject Logs client to context if Logs API is enabled here and in API server
@@ -154,8 +148,6 @@ func main() {
 			return pipelinerun.NewControllerWithConfig(ctx, results, cfg, cmw)
 		}, func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
 			return taskrun.NewControllerWithConfig(ctx, results, cfg, cmw)
-		}, func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
-			return customrun.NewControllerWithConfig(ctx, results, cfg, cmw)
 		},
 	}
 
@@ -220,11 +212,7 @@ func loadCerts() (*x509.CertPool, error) {
 		log.Println("no local cluster cert found, defaulting to system pool...")
 		return x509.SystemCertPool()
 	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			log.Printf("error closing cert file: %v", err)
-		}
-	}()
+	defer f.Close()
 	b, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("unable to read TLS cert file: %v", err)

@@ -1,4 +1,3 @@
-// Package stmt_store provides an implementation of a statement cache for SQL statements.
 package stmt_store
 
 import (

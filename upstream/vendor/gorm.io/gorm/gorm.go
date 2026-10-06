@@ -1,5 +1,3 @@
-// Package gorm is a full-featured, developer-friendly ORM for Golang.
-// See https://gorm.io for documentation and community.
 package gorm
 
 import (
@@ -25,7 +23,6 @@ type Config struct {
 	// You can disable it by setting `SkipDefaultTransaction` to true
 	SkipDefaultTransaction    bool
 	DefaultTransactionTimeout time.Duration
-	DefaultContextTimeout     time.Duration
 
 	// NamingStrategy tables, columns naming strategy
 	NamingStrategy schema.Namer
@@ -33,9 +30,7 @@ type Config struct {
 	FullSaveAssociations bool
 	// Logger
 	Logger logger.Interface
-	// NowFunc the function to be used when creating a new timestamp.
-	// It defaults to time.Now().Local(), so return values in the desired
-	// location when overriding it for timezone-sensitive applications.
+	// NowFunc the function to be used when creating a new timestamp
 	NowFunc func() time.Time
 	// DryRun generate sql without execute
 	DryRun bool
@@ -128,10 +123,8 @@ type Session struct {
 	QueryFields              bool
 	Context                  context.Context
 	Logger                   logger.Interface
-	// NowFunc overrides the function used when creating a new timestamp
-	// for this session.
-	NowFunc         func() time.Time
-	CreateBatchSize int
+	NowFunc                  func() time.Time
+	CreateBatchSize          int
 }
 
 // Open initialize db session based on dialector
@@ -242,11 +235,6 @@ func Open(dialector Dialector, opts ...Option) (db *DB, err error) {
 	if err == nil && !config.DisableAutomaticPing {
 		if pinger, ok := db.ConnPool.(interface{ Ping() error }); ok {
 			err = pinger.Ping()
-			if err != nil {
-				if db, _ := db.DB(); db != nil {
-					_ = db.Close()
-				}
-			}
 		}
 	}
 
@@ -414,9 +402,6 @@ func (db *DB) AddError(err error) error {
 			db.Error = err
 		} else {
 			db.Error = fmt.Errorf("%v; %w", db.Error, err)
-		}
-		if db.Statement != nil && db.Statement.Result != nil {
-			db.Statement.Result.Error = db.Error
 		}
 	}
 	return db.Error

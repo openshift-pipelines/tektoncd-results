@@ -1,4 +1,3 @@
-// Package flags provides shared flag definitions and parameters for CLI commands.
 package flags
 
 import (

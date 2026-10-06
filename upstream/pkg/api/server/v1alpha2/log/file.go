@@ -73,15 +73,14 @@ func (fs *fileStream) WriteTo(w io.Writer) (n int64, err error) {
 func (fs *fileStream) ReadFrom(r io.Reader) (n int64, err error) {
 	// Ensure that the directories in the path already exist
 	dir := filepath.Dir(fs.path)
-	err = os.MkdirAll(dir, 0750)
+	err = os.MkdirAll(dir, os.ModePerm)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create directory %s, %w", dir, err)
 	}
 	// Open the file with Append + Create + WriteOnly modes.
 	// This ensures the file is created if it does not exist.
 	// If the file does exist, data is appended instead of overwritten/truncated
-	// 0600 is safe since the same process reads and writes these log files
-	file, err := os.OpenFile(fs.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(fs.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open file %s: %w", fs.path, err)
 	}

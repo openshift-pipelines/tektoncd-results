@@ -1,4 +1,3 @@
-// Package config provides configuration management for the Results CLI.
 package config
 
 import (
@@ -7,7 +6,6 @@ import (
 	"fmt"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/tektoncd/results/pkg/cli/client"
@@ -159,7 +157,7 @@ func (c *config) LoadClientConfig() error {
 }
 
 func (c *config) SetVersion() {
-	c.Extension.SetGroupVersionKind(schema.GroupVersionKind{
+	c.Extension.TypeMeta.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   Group,
 		Version: Version,
 		Kind:    Kind,
@@ -177,67 +175,12 @@ func (c *config) Get() *client.Config {
 }
 
 func (c *config) Persist(p common.Params) error {
-	// Get the config context info for storing configuration
-	configContextName, clusterName, userName, err := c.getConfigContextInfo(p)
-	if err != nil {
-		return err
-	}
-
-	// Look for existing config context or create it
-	configContext, exists := c.APIConfig.Contexts[configContextName]
-	if !exists {
-		configContext = &api.Context{
-			Cluster:    clusterName,
-			AuthInfo:   userName,
-			Namespace:  "default",
-			Extensions: make(map[string]runtime.Object), // Initialize extensions
-		}
-		c.APIConfig.Contexts[configContextName] = configContext
-	}
-
-	// Ensure Extensions map is initialized even for existing contexts
-	if configContext.Extensions == nil {
-		configContext.Extensions = make(map[string]runtime.Object)
-	}
-
-	// Store/update extension in the config context
-	extensionData, err := json.Marshal(c.Extension)
-	if err != nil {
-		return fmt.Errorf("failed to marshal extension: %w", err)
-	}
-
-	configContext.Extensions[ExtensionName] = &runtime.Unknown{
-		TypeMeta: c.Extension.TypeMeta,
-		Raw:      extensionData,
-	}
-
-	return clientcmd.ModifyConfig(c.ConfigAccess, *c.APIConfig, false)
-}
-
-// getConfigContextInfo extracts cluster and user information from the current context and constructs
-// the config context name for storing Tekton Results configuration.
-//
-// Parameters:
-//   - p: common.Params containing configuration parameters, including the KubeContext.
-//
-// Returns:
-//   - configContextName: The config context name in format "tekton-results-config/{cluster}/{user}".
-//   - clusterName: The cluster name from the current context.
-//   - userName: The username from the current context.
-//   - error: An error if the current context is not set or missing cluster/user information.
-func (c *config) getConfigContextInfo(p common.Params) (configContextName, clusterName, userName string, err error) {
 	ctx := c.APIConfig.CurrentContext
 	if p.KubeContext() != "" {
 		ctx = p.KubeContext()
 	}
-
-	// Get the context to extract cluster and user info
-	context := c.APIConfig.Contexts[ctx]
-	if context == nil {
-		return "", "", "", errors.New("current context is not set in kubeconfig")
-	}
-
-	return common.BuildConfigContextInfo(context)
+	c.APIConfig.Contexts[ctx].Extensions[ExtensionName] = c.Extension
+	return clientcmd.ModifyConfig(c.ConfigAccess, *c.APIConfig, false)
 }
 
 // Set configures the Extension settings for the config object.
@@ -256,7 +199,6 @@ func (c *config) Set(prompt bool, p common.Params) error {
 		if err := c.Prompt("Host", &c.Extension.Host, host); err != nil {
 			return err
 		}
-		c.Extension.Host = strings.TrimSpace(c.Extension.Host)
 
 		token := c.Token()
 		if err, ok := token.(error); ok {
@@ -265,26 +207,22 @@ func (c *config) Set(prompt bool, p common.Params) error {
 		if err := c.Prompt("Token", &c.Extension.Token, token); err != nil {
 			return err
 		}
-		c.Extension.Token = strings.TrimSpace(c.Extension.Token)
 
 		if err := c.Prompt("API Path", &c.Extension.APIPath, ""); err != nil {
 			return err
 		}
-		c.Extension.APIPath = strings.TrimSpace(c.Extension.APIPath)
-
 		if err := c.Prompt("Insecure Skip TLS Verify", &c.Extension.InsecureSkipTLSVerify, []string{"false", "true"}); err != nil {
 			return err
 		}
-		c.Extension.InsecureSkipTLSVerify = strings.TrimSpace(c.Extension.InsecureSkipTLSVerify)
 	} else {
 		if p.Host() != "" {
-			c.Extension.Host = strings.TrimSpace(p.Host())
+			c.Extension.Host = p.Host()
 		}
 		if p.Token() != "" {
-			c.Extension.Token = strings.TrimSpace(p.Token())
+			c.Extension.Token = p.Token()
 		}
 		if p.APIPath() != "" {
-			c.Extension.APIPath = strings.TrimSpace(p.APIPath())
+			c.Extension.APIPath = p.APIPath()
 		}
 		if p.SkipTLSVerify() {
 			c.Extension.InsecureSkipTLSVerify = strconv.FormatBool(p.SkipTLSVerify())
@@ -332,8 +270,7 @@ func (c *config) Prompt(name string, value *string, data any) error {
 }
 
 // LoadExtension loads the Tekton Results extension configuration from the kubeconfig.
-// It loads from a dedicated "tekton-results-config" context to ensure configuration
-// persists regardless of current namespace context changes (e.g., 'oc project').
+// It sets the extension in the config object based on the current context or the provided context.
 //
 // Parameters:
 //   - p: common.Params containing configuration parameters, including the KubeContext.
@@ -341,30 +278,21 @@ func (c *config) Prompt(name string, value *string, data any) error {
 // Returns:
 //   - error: An error if the current context is not set or if there's an issue unmarshaling the extension data.
 func (c *config) LoadExtension(p common.Params) error {
-	// Get the config context info for loading configuration
-	configContextName, _, _, err := c.getConfigContextInfo(p)
-	if err != nil {
-		return err
+	ctx := c.APIConfig.CurrentContext
+	if p.KubeContext() != "" {
+		ctx = p.KubeContext()
 	}
-
-	// Check if config context exists
-	if configContext, exists := c.APIConfig.Contexts[configContextName]; exists {
-		if configContext.Extensions != nil {
-			if ext := configContext.Extensions[ExtensionName]; ext != nil {
-				// Load existing extension
-				c.Extension = new(Extension)
-				if err := json.Unmarshal(ext.(*runtime.Unknown).Raw, c.Extension); err != nil {
-					return fmt.Errorf("failed to unmarshal extension: %w", err)
-				}
-				return nil
-			}
-		}
+	cc := c.APIConfig.Contexts[ctx]
+	if cc == nil {
+		return errors.New("current context is not set in kubeconfig")
 	}
-
-	// No config context or no extension found - create empty extension
 	c.Extension = new(Extension)
-	c.SetVersion()
-	return nil
+	e := cc.Extensions[ExtensionName]
+	if e == nil {
+		c.SetVersion()
+		return c.Persist(p)
+	}
+	return json.Unmarshal(e.(*runtime.Unknown).Raw, c.Extension)
 }
 
 // Host retrieves the host URL for the Tekton Results API based on external access detection.

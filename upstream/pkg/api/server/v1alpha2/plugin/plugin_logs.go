@@ -119,49 +119,6 @@ func (s *LogServer) GetLog(req *pb3.GetLogRequest, srv pb3.Logs_GetLogServer) er
 	return nil
 }
 
-func (s *LogServer) getLogRequestParams(rec *db.Record) (startTime, endTime, uidKey string, err error) {
-	switch rec.Type {
-	case typePipelineRun:
-		uidKey = pipelineRunUIDKey
-		data := &pipelinev1.PipelineRun{}
-		err := json.Unmarshal(rec.Data, data)
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to marshal pipelinerun data for fetching log, err: %w", err)
-		}
-
-		if data.Status.StartTime == nil {
-			return "", "", "", errors.New("there's no startime in pipelinerun")
-		}
-		startTime = strconv.FormatInt(data.Status.StartTime.UTC().Unix(), 10)
-
-		if data.Status.CompletionTime == nil {
-			return "", "", "", errors.New("there's no completion in pipelinerun")
-		}
-		endTime = strconv.FormatInt(data.Status.CompletionTime.Add(s.forwarderDelayDuration).UTC().Unix(), 10)
-
-	case typeTaskRun:
-		uidKey = taskRunUIDKey
-		data := &pipelinev1.TaskRun{}
-		err := json.Unmarshal(rec.Data, data)
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to marshal taskrun data for fetching log, err: %w", err)
-		}
-		if data.Status.StartTime == nil {
-			return "", "", "", errors.New("there's no startime in taskrun")
-		}
-		startTime = strconv.FormatInt(data.Status.StartTime.UTC().Unix(), 10)
-
-		if data.Status.CompletionTime == nil {
-			return "", "", "", errors.New("there's no completion in taskrun")
-		}
-		endTime = strconv.FormatInt(data.Status.CompletionTime.Add(s.forwarderDelayDuration).UTC().Unix(), 10)
-
-	default:
-		return "", "", "", fmt.Errorf("record type is invalid, record ID: %v, Name: %v, result Name: %v, result ID: %v", rec.ID, rec.Name, rec.ResultName, rec.ResultID)
-	}
-	return startTime, endTime, uidKey, nil
-}
-
 func getLokiLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) error {
 	URL, err := url.Parse(s.config.LOGGING_PLUGIN_API_URL)
 	if err != nil {
@@ -170,63 +127,68 @@ func getLokiLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) 
 	}
 	URL.Path = path.Join(URL.Path, s.config.LOGGING_PLUGIN_PROXY_PATH, lokiQueryPath)
 
-	startTime, endTime, uidKey, err := s.getLogRequestParams(rec)
-	if err != nil {
-		s.logger.Error(err)
-		return err
+	var startTime, endTime, uidKey string
+	switch rec.Type {
+	case typePipelineRun:
+		uidKey = pipelineRunUIDKey
+		data := &pipelinev1.PipelineRun{}
+		err := json.Unmarshal(rec.Data, data)
+		if err != nil {
+			err = fmt.Errorf("failed to marshal pipelinerun data for fetching log, err: %s", err.Error())
+			s.logger.Error(err)
+			return err
+		}
+
+		if data.Status.StartTime == nil {
+			err = errors.New("there's no startime in pipelinerun")
+			s.logger.Error(err)
+			return err
+		}
+		startTime = strconv.FormatInt(data.Status.StartTime.UTC().Unix(), 10)
+
+		if data.Status.CompletionTime == nil {
+			err = errors.New("there's no completion in pipelinerun")
+			s.logger.Error(err)
+			return err
+		}
+		endTime = strconv.FormatInt(data.Status.CompletionTime.Add(s.forwarderDelayDuration).UTC().Unix(), 10)
+
+	case typeTaskRun:
+		uidKey = taskRunUIDKey
+		data := &pipelinev1.TaskRun{}
+		err := json.Unmarshal(rec.Data, data)
+		if err != nil {
+			err = fmt.Errorf("failed to marshal taskrun data for fetching log, err: %s", err.Error())
+			s.logger.Error(err)
+			return err
+		}
+		if data.Status.StartTime == nil {
+			err = errors.New("there's no startime in taskrun")
+			s.logger.Error(err)
+			return err
+		}
+		startTime = strconv.FormatInt(data.Status.StartTime.UTC().Unix(), 10)
+
+		if data.Status.CompletionTime == nil {
+			err = errors.New("there's no completion in taskrun")
+			s.logger.Error(err)
+			return err
+		}
+		endTime = strconv.FormatInt(data.Status.CompletionTime.Add(s.forwarderDelayDuration).UTC().Unix(), 10)
+
+	default:
+		s.logger.Errorf("record type is invalid, record ID: %v, Name: %v, result Name: %v, result ID:  %v", rec.ID, rec.Name, rec.ResultName, rec.ResultID)
+		return errors.New("record type is invalid")
 	}
 
 	parameters := url.Values{}
 	for k, v := range s.queryParams {
 		parameters.Add(k, v)
 	}
-
-	baseSelector := fmt.Sprintf(`{ %s%s="%s" }`, s.staticLabels, s.config.LOGGING_PLUGIN_NAMESPACE_KEY, parent)
-	uidFilter := fmt.Sprintf(`|uid="%s"`, rec.Name)
-	jsonFields := map[string]string{
-		"uid":     uidKey,
-		"message": "message",
-	}
-
+	query := `{ ` + s.staticLabels + s.config.LOGGING_PLUGIN_NAMESPACE_KEY + `="` + parent + `" }|json uid="` + uidKey + `", message="message" |uid="` + rec.Name + `"| line_format "{{.message}}"`
 	if s.config.LOGGING_PLUGIN_CONTAINER_KEY != "" {
-		jsonFields["container"] = s.config.LOGGING_PLUGIN_CONTAINER_KEY
+		query = `{ ` + s.staticLabels + s.config.LOGGING_PLUGIN_NAMESPACE_KEY + `="` + parent + `" }|json uid="` + uidKey + `", container="` + s.config.LOGGING_PLUGIN_CONTAINER_KEY + `", message="message" |uid="` + rec.Name + `"| line_format "container-{{.container}}: message={{.message}}"`
 	}
-
-	if s.config.LOGGING_PLUGIN_JSON_MAP != "" {
-		var userMap map[string]string
-		if err := json.Unmarshal([]byte(s.config.LOGGING_PLUGIN_JSON_MAP), &userMap); err != nil {
-			s.logger.Errorf("Error parsing LOGGING_PLUGIN_JSON_MAP: %v", err)
-		} else {
-			for k, v := range userMap {
-				jsonFields[k] = v
-			}
-		}
-	}
-	var keys []string
-	for k := range jsonFields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var jsonArgs []string
-	for _, k := range keys {
-		escapedVal := strings.ReplaceAll(jsonFields[k], `"`, `\"`)
-		jsonArgs = append(jsonArgs, fmt.Sprintf(`%s="%s"`, k, escapedVal))
-	}
-	parsingStage := fmt.Sprintf("| json %s", strings.Join(jsonArgs, ", "))
-	var outputStage string
-	if s.config.LOGGING_PLUGIN_LINE_FORMAT != "" {
-		outputStage = fmt.Sprintf(`| line_format "%s"`, s.config.LOGGING_PLUGIN_LINE_FORMAT)
-	} else {
-		if s.config.LOGGING_PLUGIN_CONTAINER_KEY != "" {
-			outputStage = `| line_format "container-{{.container}}: message={{.message}}"`
-		} else {
-			outputStage = `| line_format "{{.message}}"`
-		}
-	}
-	query := fmt.Sprintf("%s%s %s%s", baseSelector, parsingStage, uidFilter, outputStage)
-	s.logger.Debugf("query: %s", query)
-
 	parameters.Add("query", query)
 	parameters.Add("end", endTime)
 	parameters.Add("start", startTime)
@@ -457,9 +419,7 @@ func getBlobLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) 
 		baseName := re.ReplaceAllString(parts[0], "")
 		s.logger.Debugf("mergedLogParts key: %s value: %v", baseName, parts)
 		_, file := filepath.Split(baseName)
-		if _, err := fmt.Fprint(writer, strings.TrimRight(file, ".log")+" :-\n"); err != nil {
-			s.logger.Errorf("error writing log header: %s", err)
-		}
+		fmt.Fprint(writer, strings.TrimRight(file, ".log")+" :-\n")
 		for _, part := range parts {
 			err := func() error {
 				rc, err := bucket.NewReader(ctx, part, nil)
@@ -467,11 +427,7 @@ func getBlobLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) 
 					s.logger.Errorf("error creating bucket reader: %s for log part: %s", err, part)
 					return err
 				}
-				defer func() {
-					if err := rc.Close(); err != nil {
-						s.logger.Errorf("error closing bucket reader: %s", err)
-					}
-				}()
+				defer rc.Close()
 
 				_, err = rc.WriteTo(writer)
 				if err != nil {
@@ -483,9 +439,7 @@ func getBlobLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record) 
 				s.logger.Error(err)
 				return err
 			}
-			if _, err := fmt.Fprint(writer, "\n"); err != nil {
-				s.logger.Errorf("error writing newline: %s", err)
-			}
+			fmt.Fprint(writer, "\n")
 		}
 	}
 
@@ -531,12 +485,16 @@ func getSplunkLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record
 
 	}
 
-	startTime, endTime, uidKey, err := s.getLogRequestParams(rec)
-	if err != nil {
-		s.logger.Error(err)
-		return err
+	var uidKey string
+	switch rec.Type {
+	case typePipelineRun:
+		uidKey = pipelineRunUIDKey
+	case typeTaskRun:
+		uidKey = taskRunUIDKey
+	default:
+		s.logger.Errorf("record type is invalid, record ID: %v, Name: %v, result Name: %v, result ID:  %v, rec Type: %v", rec.ID, rec.Name, rec.ResultName, rec.ResultID, rec.Type)
+		return errors.New("record type is invalid")
 	}
-
 	index, ok := s.queryParams["index"]
 	if !ok {
 		s.logger.Errorf("index not specified in queryParams: %v\n", s.queryParams)
@@ -551,8 +509,6 @@ func getSplunkLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record
 
 	queryData := url.Values{}
 	queryData.Set("search", query)
-	queryData.Set("earliest_time", startTime)
-	queryData.Set("latest_time", endTime)
 
 	req, err := http.NewRequest("POST", URL.String()+splunkOutputFormat, bytes.NewReader([]byte(queryData.Encode())))
 	if err != nil {
@@ -573,11 +529,7 @@ func getSplunkLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record
 		s.logger.Debugf("splunk request url:%s", URL.String())
 		return status.Error(codes.Internal, "Error streaming log")
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			s.logger.Errorf("error closing response body: %s", err)
-		}
-	}()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		s.logger.Errorf("Splunk Job Creation API request failed with HTTP status code: %d", resp.StatusCode)
@@ -623,11 +575,7 @@ func getSplunkLogs(s *LogServer, writer io.Writer, parent string, rec *db.Record
 		s.logger.Debugf("splunk request url:%s", URL.String())
 		return status.Error(codes.Internal, "Error streaming log")
 	}
-	defer func() {
-		if err := lresp.Body.Close(); err != nil {
-			s.logger.Errorf("error closing response body: %s", err)
-		}
-	}()
+	defer lresp.Body.Close()
 
 	if lresp.StatusCode != http.StatusOK {
 		s.logger.Errorf("Splunk Fetch Log API request failed with HTTP status code: %d", resp.StatusCode)
@@ -706,11 +654,7 @@ func pollSplunkJobStatus(s *LogServer, url, token string) error {
 					s.logger.Errorf("request to splunk failed, received nil response,: %s", url)
 					return fmt.Errorf("request to splunk failed, received nil response,: %s", url)
 				}
-				defer func() {
-					if err := resp.Body.Close(); err != nil {
-						s.logger.Errorf("error closing response body: %s", err)
-					}
-				}()
+				defer resp.Body.Close()
 				if resp.StatusCode != http.StatusOK {
 					s.logger.Errorf("Splunk Job Creation API request failed with HTTP status code: %d", resp.StatusCode)
 					return fmt.Errorf("splunk job creation API request failed with HTTP status code: %d", resp.StatusCode)

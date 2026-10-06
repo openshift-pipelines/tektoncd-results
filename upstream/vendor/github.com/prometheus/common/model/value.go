@@ -191,8 +191,7 @@ func (ss SampleStream) String() string {
 }
 
 func (ss SampleStream) MarshalJSON() ([]byte, error) {
-	switch {
-	case len(ss.Histograms) > 0 && len(ss.Values) > 0:
+	if len(ss.Histograms) > 0 && len(ss.Values) > 0 {
 		v := struct {
 			Metric     Metric                `json:"metric"`
 			Values     []SamplePair          `json:"values"`
@@ -203,7 +202,7 @@ func (ss SampleStream) MarshalJSON() ([]byte, error) {
 			Histograms: ss.Histograms,
 		}
 		return json.Marshal(&v)
-	case len(ss.Histograms) > 0:
+	} else if len(ss.Histograms) > 0 {
 		v := struct {
 			Metric     Metric                `json:"metric"`
 			Histograms []SampleHistogramPair `json:"histograms"`
@@ -212,7 +211,7 @@ func (ss SampleStream) MarshalJSON() ([]byte, error) {
 			Histograms: ss.Histograms,
 		}
 		return json.Marshal(&v)
-	default:
+	} else {
 		v := struct {
 			Metric Metric       `json:"metric"`
 			Values []SamplePair `json:"values"`
@@ -259,13 +258,13 @@ func (s Scalar) String() string {
 // MarshalJSON implements json.Marshaler.
 func (s Scalar) MarshalJSON() ([]byte, error) {
 	v := strconv.FormatFloat(float64(s.Value), 'f', -1, 64)
-	return json.Marshal([...]any{s.Timestamp, v})
+	return json.Marshal([...]interface{}{s.Timestamp, string(v)})
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (s *Scalar) UnmarshalJSON(b []byte) error {
 	var f string
-	v := [...]any{&s.Timestamp, &f}
+	v := [...]interface{}{&s.Timestamp, &f}
 
 	if err := json.Unmarshal(b, &v); err != nil {
 		return err
@@ -291,12 +290,12 @@ func (s *String) String() string {
 
 // MarshalJSON implements json.Marshaler.
 func (s String) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]any{s.Timestamp, s.Value})
+	return json.Marshal([]interface{}{s.Timestamp, s.Value})
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (s *String) UnmarshalJSON(b []byte) error {
-	v := [...]any{&s.Timestamp, &s.Value}
+	v := [...]interface{}{&s.Timestamp, &s.Value}
 	return json.Unmarshal(b, &v)
 }
 
@@ -350,9 +349,9 @@ func (m Matrix) Len() int           { return len(m) }
 func (m Matrix) Less(i, j int) bool { return m[i].Metric.Before(m[j].Metric) }
 func (m Matrix) Swap(i, j int)      { m[i], m[j] = m[j], m[i] }
 
-func (m Matrix) String() string {
-	matCp := make(Matrix, len(m))
-	copy(matCp, m)
+func (mat Matrix) String() string {
+	matCp := make(Matrix, len(mat))
+	copy(matCp, mat)
 	sort.Sort(matCp)
 
 	strs := make([]string, len(matCp))

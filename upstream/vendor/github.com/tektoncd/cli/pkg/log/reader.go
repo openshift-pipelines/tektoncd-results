@@ -37,7 +37,6 @@ type Reader struct {
 	steps           []string
 	logType         string
 	task            string
-	displayName     string
 	number          int
 	activityTimeout time.Duration
 	retries         int
@@ -107,10 +106,6 @@ func (r *Reader) setRun(run string) {
 
 func (r *Reader) setTask(task string) {
 	r.task = task
-}
-
-func (r *Reader) setDisplayName(displayName string) {
-	r.displayName = displayName
 }
 
 func (r *Reader) clone() *Reader {

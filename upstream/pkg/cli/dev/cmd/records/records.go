@@ -8,9 +8,8 @@ import (
 // Command returns a cobra command for `records` sub commands
 func Command(params *flags.Params) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:        "records [command]",
-		Short:      "[DEPRECATED] Command sub-group for querying Records",
-		Deprecated: "use 'pipelinerun' or 'taskrun' commands to query PipelineRuns and TaskRuns",
+		Use:   "records",
+		Short: "[To be deprecated] Command sub-group for querying Records",
 		Annotations: map[string]string{
 			"commandType": "main",
 		},
