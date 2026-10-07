@@ -35,7 +35,7 @@ LABEL \
     maintainer="pipelines-extcomm@redhat.com" \
     name="openshift-pipelines/pipelines-results-api-rhel8" \
     summary="Red Hat OpenShift Pipelines tektoncd-results api" \
-    version="v1.15.5"
+    version="v1.15.6"
 
 RUN groupadd -r -g 65532 nonroot && useradd --no-log-init -r -u 65532 -g nonroot nonroot
 USER 65532
