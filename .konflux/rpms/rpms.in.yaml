@@ -1,7 +1,9 @@
-contentOrigin: 
+contentOrigin:
   repofiles:
-    - ./ubi.repo 
-packages: [shadow-utils,git]
+    - ./ubi.repo
+packages:
+  - shadow-utils
+  - git
 arches:
   # The list of architectures
   - aarch64
