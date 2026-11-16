@@ -37,10 +37,12 @@ import (
 	v1alpha2pb "github.com/tektoncd/results/proto/v1alpha2/results_go_proto"
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/credentials/oauth"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
@@ -58,6 +60,7 @@ const (
 	// This is a fixed path which does not contain a hard-coded secret or credential
 	podTokenPath             = "/var/run/secrets/kubernetes.io/serviceaccount/token" //nolint:gosec
 	finalizerRequeueInterval = 10 * time.Second
+	defaultServiceConfig     = `{"loadBalancingConfig":[{"round_robin":{}}]}`
 )
 
 var (
@@ -72,6 +75,7 @@ var (
 	logsAPI                      = flag.Bool("logs_api", false, "Disable sending logs. If not set, the logs will be sent only if server support API for it")
 	logsTimestamps               = flag.Bool("logs_timestamps", false, "Collect logs with timestamps")
 	labelSelector                = flag.String("label_selector", "", "Selector (label query) to filter objects to be deleted. Matching objects must satisfy all labels requirements to be eligible for deletion")
+	resyncPeriod                 = flag.Duration("resync_period", controller.DefaultResyncPeriod, "How often the informers resync, which re-enqueues every cached Run for reconciliation. 0 disables periodic resync. Defaults to the knative default of 10h.")
 	requeueInterval              = flag.Duration("requeue_interval", 10*time.Minute, "How long the Watcher waits to reprocess keys on certain events (e.g. an object doesn't match the provided selectors)")
 	namespace                    = flag.String("namespace", corev1.NamespaceAll, "Should the Watcher only watch a single namespace, then this value needs to be set to the namespace name otherwise leave it empty.")
 	summaryLabels                = flag.String("summary_labels", "tekton.dev/pipeline", "List of Labels keys separated by comma which should be part of the summary of the result")
@@ -83,7 +87,18 @@ var (
 	disableStoringIncompleteRuns = flag.Bool("disable_storing_incomplete_runs", false, "If enabled, Runs will not be stored until they are complete. If disabled, Runs will be initially stored upon creation and continuously upserted until after they're deleted")
 	storeDeadline                = flag.Duration("store_deadline", 10*time.Minute, "How long to wait for storing the PipelineRun and TaskRun resources before aborting and clearing the finalizer in case of delete event")
 	forwardBuffer                = flag.Duration("forward_buffer", 150*time.Second, "This determines duration since completion time of TaskRun to wait for forwarder to finish")
+	managedByValues              = flag.String("managed_by_values", "", "Comma-separated list of additional spec.managedBy values the watcher will process. Runs with unset, empty, whitespace-only or \"tekton.dev/pipeline\" managedBy values are always accepted.")
+	requiredAnnotations          = newAnnotationFlag("required_annotation", "Repeatable flag. Use \"key=value\" to require an exact match, or just \"key\" to require existence of the annotation regardless of its value. The stored annotation is always implicitly required.")
 )
+
+// withResyncPeriod returns a context carrying the informer resync period.
+// A period of 0 disables periodic resync; negative values are rejected.
+func withResyncPeriod(ctx context.Context, period time.Duration) (context.Context, error) {
+	if period < 0 {
+		return ctx, fmt.Errorf("resync period must be non-negative, got %v", period)
+	}
+	return controller.WithResyncPeriod(ctx, period), nil
+}
 
 func main() {
 	disableHighAvailability := flag.Bool("disable-ha", false, "Whether to disable high-availability functionality for this component.  This flag will be deprecated "+
@@ -97,9 +112,16 @@ func main() {
 
 	ctx := signals.NewContext()
 
+	// Allow users to customize how often informers resync (and therefore how
+	// often every cached object is re-enqueued).
+	ctx, err := withResyncPeriod(ctx, *resyncPeriod)
+	if err != nil {
+		log.Fatalf("invalid -resync_period: %v", err)
+	}
+
 	ctx = filteredinformerfactory.WithSelectors(ctx, "app.kubernetes.io/name")
 
-	conn, err := connectToAPIServer(ctx, *apiAddr, *authMode)
+	conn, err := connectToAPIServer(*apiAddr, *authMode)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
@@ -136,9 +158,12 @@ func main() {
 		SummaryLabels:                *summaryLabels,
 		SummaryAnnotations:           *summaryAnnotations,
 		DisableStoringIncompleteRuns: *disableStoringIncompleteRuns,
+		AllowedManagedByValues:       reconciler.ParseManagedByValues(*managedByValues),
+		RequiredAnnotations:          map[string]reconciler.AnnotationRequirement(*requiredAnnotations),
 	}
 
 	log.Printf("dynamic reconcile timeout %s and update log timeout is %s", cfg.DynamicReconcileTimeout.String(), cfg.UpdateLogTimeout.String())
+	log.Printf("managed_by_values: %v", sets.List(cfg.AllowedManagedByValues))
 
 	if selector := *labelSelector; selector != "" {
 		if err := cfg.SetLabelSelector(selector); err != nil {
@@ -169,11 +194,12 @@ func main() {
 		k8scfg.Burst = *burst * len(ctors)
 	}
 
-	sharedmain.MainWithConfig(injection.WithNamespaceScope(ctx, *namespace), "watcher", k8scfg, ctors...,
+	sharedmain.MainWithConfig(
+		injection.WithNamespaceScope(ctx, *namespace), "watcher", k8scfg, ctors...,
 	)
 }
 
-func connectToAPIServer(ctx context.Context, apiAddr string, authMode string) (*grpc.ClientConn, error) {
+func connectToAPIServer(apiAddr string, authMode string) (*grpc.ClientConn, error) {
 	// Load TLS certs
 	certs, err := loadCerts()
 	if err != nil {
@@ -181,13 +207,22 @@ func connectToAPIServer(ctx context.Context, apiAddr string, authMode string) (*
 	}
 	cred := credentials.NewClientTLSFromCert(certs, "")
 
-	opts := []grpc.DialOption{
-		grpc.WithBlock(),
+	connectParams := grpc.ConnectParams{
+		Backoff:           backoff.DefaultConfig,
+		MinConnectTimeout: 1 * time.Minute,
 	}
+
+	opts := []grpc.DialOption{
+		grpc.WithDefaultServiceConfig(defaultServiceConfig),
+		grpc.WithConnectParams(connectParams),
+		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+	}
+
 	// Add in additional credentials to requests if desired.
 	switch authMode {
 	case "google":
-		opts = append(opts,
+		opts = append(
+			opts,
 			grpc.WithAuthority(apiAddr),
 			grpc.WithTransportCredentials(cred),
 			grpc.WithDefaultCallOptions(grpc.PerRPCCredentials(creds.Google())),
@@ -199,7 +234,8 @@ func connectToAPIServer(ctx context.Context, apiAddr string, authMode string) (*
 		} else {
 			ts = transport.NewCachedFileTokenSource(podTokenPath)
 		}
-		opts = append(opts,
+		opts = append(
+			opts,
 			grpc.WithDefaultCallOptions(grpc.PerRPCCredentials(oauth.TokenSource{TokenSource: ts})),
 			grpc.WithTransportCredentials(cred),
 		)
@@ -208,9 +244,7 @@ func connectToAPIServer(ctx context.Context, apiAddr string, authMode string) (*
 	}
 
 	log.Printf("dialing %s...\n", apiAddr)
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer cancel()
-	return grpc.DialContext(ctx, apiAddr, opts...)
+	return grpc.NewClient(apiAddr, opts...)
 }
 
 func loadCerts() (*x509.CertPool, error) {
@@ -238,4 +272,10 @@ func loadCerts() (*x509.CertPool, error) {
 		return nil, fmt.Errorf("unable to add cert to pool")
 	}
 	return certs, nil
+}
+
+func newAnnotationFlag(name, usage string) *reconciler.AnnotationFlag {
+	f := &reconciler.AnnotationFlag{}
+	flag.Var(f, name, usage)
+	return f
 }

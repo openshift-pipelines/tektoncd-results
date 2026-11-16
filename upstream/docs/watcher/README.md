@@ -76,6 +76,66 @@ Watcher implements a finalizer to block deletion by an external pruner when obje
 
 When deletion request comes, it will block until completion time + `completed_run_grace_period` period is passed. A hard limit could be set as `store_deadline` (default 10m), after which the object will be removed from the cluster even without confirmation it's been stored in the DB.
 
+### Required annotations for finalizer release
+
+The `--required_annotation` flag (repeatable) specifies annotations that must be present on a PipelineRun or TaskRun before the Watcher clears its finalizer. This is useful in multicluster scenarios where external controllers (e.g. a Hub scheduler or syncer service) need to write annotations on a resource before it can be safely deleted.
+
+The flag supports two modes:
+1. **Value matching:** Use `key=value` to require that the annotation exists AND its value exactly matches the provided value.
+2. **Existence only:** Use `key` (without an `=`) to require that the annotation exists, regardless of what its value is.
+
+The `results.tekton.dev/stored` annotation is always implicitly required and does not need to be listed. When the flag is not provided (the default), only the stored annotation is checked and behavior is unchanged from previous versions.
+
+For example, to require that a Hub scheduler has annotated the resource (existence only) before the finalizer is cleared:
+
+```
+--required_annotation "hub.example.com/scheduled"
+```
+
+Multiple annotations with mixed requirements:
+
+```
+--required_annotation "hub.example.com/scheduled"
+--required_annotation "ci.example.com/status=passed"
+```
+
+If any required annotation is missing or does not match its expected value, the Watcher re-queues the resource and checks again after the `FinalizerRequeueInterval` (10 seconds). The `store_deadline` safety limit still applies — if the deadline passes, the finalizer is cleared regardless of whether the required annotations are present.
+
+> **Note:** This flag applies to both PipelineRun and TaskRun resources. CustomRuns are not affected.
+
+## Filtering by `spec.managedBy`
+
+The `managed_by_values` flag controls which TaskRuns and PipelineRuns the Watcher will process based on their `spec.managedBy` field. This is useful when multiple controllers manage Tekton resources and you want the Results Watcher to only track runs managed by specific controllers.
+
+- `tekton.dev/pipeline` is **always accepted** and cannot be removed.
+- Runs with **unset, empty, or whitespace-only** `spec.managedBy` are always accepted (backward compatible).
+- Additional values can be specified as a comma-separated list.
+
+For example, to also process runs managed by a custom controller:
+
+```
+--managed_by_values=custom-controller
+```
+
+Multiple values:
+
+```
+--managed_by_values=custom-controller,another-controller
+```
+
+CustomRuns are not filtered because the CustomRun type does not have a `spec.managedBy` field.
+
+> **Note:** If a value is removed from `--managed_by_values`, the Watcher will
+> still process runs that already carry a Results finalizer so the finalizer
+> can be cleared and the resource can be deleted. New runs with that
+> `managedBy` value will be ignored. Runs that had a finalizer but were not
+> yet stored will **not** be stored — the finalizer is released without
+> persisting data, matching the operator's intent to stop tracking those runs.
+
+> **Known limitation:** Filtering applies to each resource independently.
+> If an external controller sets `spec.managedBy` on a PipelineRun but its
+> child TaskRuns or CustomRuns have nil `spec.managedBy` (the default), the
+> Watcher will ignore the PipelineRun but still process the child runs.
 
 ## Disabling Incomplete Runs storage
 
@@ -84,3 +144,9 @@ The `disable_storing_incomplete_runs` flag controls whether the Watcher should s
 When set to `true`, the Watcher will only store Runs once they are completed. This is useful for reducing the load for API server and reconciliation queue. 
 
 When set to `false` (default), the Watcher will attempt to continuously store all Runs on every modification regardless of their completion status, allowing you to track the full lifecycle of your PipelineRuns, TaskRuns, and CustomRuns.
+
+## Informer resync period
+
+The `resync_period` flag controls how often the Watcher's informers resync. On every resync, each cached PipelineRun, TaskRun, and CustomRun is re-enqueued for reconciliation, which acts as a safety net for missed events but produces a burst of work on clusters with many runs.
+
+The default is `10h`, matching the knative default, so behavior is unchanged unless the flag is set. A value of `0` disables periodic resync; negative values are rejected at startup. Note that a restart or a change in leader-election bucket ownership still re-enqueues the cached runs regardless of this setting.
