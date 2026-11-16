@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/utils/ptr"
 	apis "knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	"knative.dev/pkg/controller"
@@ -64,6 +65,22 @@ func TestReconcile(t *testing.T) {
 			},
 			cfg: &reconciler.Config{
 				DisableStoringIncompleteRuns: true,
+			},
+			want: nil,
+		},
+		{
+			name: "disallowed managedBy - skip",
+			tr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-tr",
+					Namespace: "test-ns",
+				},
+				Spec: pipelinev1.TaskRunSpec{
+					ManagedBy: ptr.To("custom-controller"),
+				},
+			},
+			cfg: &reconciler.Config{
+				AllowedManagedByValues: reconciler.ParseManagedByValues(""),
 			},
 			want: nil,
 		},
@@ -313,6 +330,167 @@ func TestFinalize(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "required annotations not ready - requeue",
+			pr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pr",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						resultsannotation.Stored: "true",
+					},
+				},
+				Status: pipelinev1.TaskRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					TaskRunStatusFields: pipelinev1.TaskRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg: &reconciler.Config{
+				StoreDeadline:            &storeDeadline,
+				FinalizerRequeueInterval: finalizerRequeueInterval,
+				RequiredAnnotations:      map[string]reconciler.AnnotationRequirement{"hub.example.com/scheduled": {ExactMatch: true, Value: "true"}},
+			},
+			want: controller.NewRequeueAfter(finalizerRequeueInterval),
+		},
+		{
+			name: "required annotations all satisfied - allow finalization",
+			pr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pr",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						resultsannotation.Stored:    "true",
+						"hub.example.com/scheduled": "true",
+					},
+				},
+				Status: pipelinev1.TaskRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					TaskRunStatusFields: pipelinev1.TaskRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg: &reconciler.Config{
+				StoreDeadline:            &storeDeadline,
+				FinalizerRequeueInterval: finalizerRequeueInterval,
+				RequiredAnnotations:      map[string]reconciler.AnnotationRequirement{"hub.example.com/scheduled": {ExactMatch: true, Value: "true"}},
+			},
+			want: nil,
+		},
+		{
+			name: "multiple required annotations - one missing - requeue",
+			pr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pr",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						resultsannotation.Stored:    "true",
+						"hub.example.com/scheduled": "true",
+					},
+				},
+				Status: pipelinev1.TaskRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					TaskRunStatusFields: pipelinev1.TaskRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg: &reconciler.Config{
+				StoreDeadline:            &storeDeadline,
+				FinalizerRequeueInterval: finalizerRequeueInterval,
+				RequiredAnnotations: map[string]reconciler.AnnotationRequirement{
+					"hub.example.com/scheduled": {ExactMatch: true, Value: "true"},
+					"syncer.example.com/synced": {ExactMatch: true, Value: "true"},
+				},
+			},
+			want: controller.NewRequeueAfter(finalizerRequeueInterval),
+		},
+		{
+			name: "required annotation present but wrong value - requeue",
+			pr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pr",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						resultsannotation.Stored:    "true",
+						"hub.example.com/scheduled": "false",
+					},
+				},
+				Status: pipelinev1.TaskRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					TaskRunStatusFields: pipelinev1.TaskRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now()},
+					},
+				},
+			},
+			cfg: &reconciler.Config{
+				StoreDeadline:            &storeDeadline,
+				FinalizerRequeueInterval: finalizerRequeueInterval,
+				RequiredAnnotations:      map[string]reconciler.AnnotationRequirement{"hub.example.com/scheduled": {ExactMatch: true, Value: "true"}},
+			},
+			want: controller.NewRequeueAfter(finalizerRequeueInterval),
+		},
+		{
+			name: "store deadline passed - required annotations ignored",
+			pr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pr",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						resultsannotation.Stored: "true",
+					},
+				},
+				Status: pipelinev1.TaskRunStatus{
+					Status: duckv1.Status{
+						Conditions: duckv1.Conditions{
+							apis.Condition{
+								Type:   apis.ConditionSucceeded,
+								Status: corev1.ConditionTrue,
+							},
+						},
+					},
+					TaskRunStatusFields: pipelinev1.TaskRunStatusFields{
+						CompletionTime: &metav1.Time{Time: time.Now().Add(-2 * time.Hour)},
+					},
+				},
+			},
+			cfg: &reconciler.Config{
+				StoreDeadline:            &storeDeadline,
+				FinalizerRequeueInterval: finalizerRequeueInterval,
+				RequiredAnnotations:      map[string]reconciler.AnnotationRequirement{"hub.example.com/scheduled": {ExactMatch: true, Value: "true"}},
+			},
+			want: nil,
+		},
+		{
 			name: "verify finalizer requeue interval",
 			pr: &pipelinev1.TaskRun{
 				ObjectMeta: metav1.ObjectMeta{
@@ -451,6 +629,66 @@ func TestFinalize(t *testing.T) {
 			got := r.finalize(ctx, tc.pr, tc.reconcileError)
 			if !errors.Is(got, tc.want) {
 				t.Errorf("finalize() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFinalizeKindDisallowedManagedBy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tr   *pipelinev1.TaskRun
+		cfg  *reconciler.Config
+		want knativereconciler.Event
+	}{
+		{
+			name: "disallowed managedBy - release finalizer",
+			tr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-tr",
+					Namespace:  "test-ns",
+					Finalizers: []string{"results.tekton.dev/taskrun"},
+				},
+				Spec: pipelinev1.TaskRunSpec{
+					ManagedBy: ptr.To("custom-controller"),
+				},
+			},
+			cfg: &reconciler.Config{
+				AllowedManagedByValues: reconciler.ParseManagedByValues(""),
+			},
+			want: nil,
+		},
+		{
+			name: "disallowed managedBy with merge-patch finalizer - release finalizer",
+			tr: &pipelinev1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:          "test-tr",
+					Namespace:     "test-ns",
+					Finalizers:    []string{"results.tekton.dev/taskrun"},
+					ManagedFields: mergePatchFinalizerManagedFields("results.tekton.dev/taskrun"),
+				},
+				Spec: pipelinev1.TaskRunSpec{
+					ManagedBy: ptr.To("custom-controller"),
+				},
+			},
+			cfg: &reconciler.Config{
+				AllowedManagedByValues: reconciler.ParseManagedByValues(""),
+			},
+			want: nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctx = logging.WithLogger(ctx, zaptest.NewLogger(t).Sugar())
+
+			fakeClient := fakeversioned.NewSimpleClientset(tc.tr)
+			r := &Reconciler{
+				cfg:            tc.cfg,
+				pipelineClient: fakeClient,
+			}
+			got := r.FinalizeKind(ctx, tc.tr)
+			if got != tc.want {
+				t.Errorf("FinalizeKind() = %v, want %v", got, tc.want)
 			}
 		})
 	}
