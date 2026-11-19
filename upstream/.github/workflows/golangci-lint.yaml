@@ -1,12 +1,19 @@
 name: golangci-lint
-# Thin wrapper that delegates to the canonical golangci-lint workflow
-# maintained on the main branch. See
-# https://github.com/tektoncd/results/blob/main/.github/workflows/golangci-lint.yaml
 on:  # yamllint disable-line rule:truthy
   push:
     branches:
-      - release-v0.20.x
+      - main
   pull_request:  # yamllint disable-line rule:empty-values
+  workflow_call:
+    inputs:
+      base-ref:
+        description: >-
+          Base ref to diff against for --new-from-merge-base. github.base_ref
+          is only set for direct pull_request triggers and is empty inside a
+          called workflow, so callers invoking this via workflow_call from a
+          pull_request should pass their own github.base_ref here.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,9 +22,18 @@ permissions:
 jobs:
   golangci:
     name: lint
-    permissions:
-      contents: read
-      checks: write
-    uses: tektoncd/results/.github/workflows/golangci-lint.yaml@main
-    with:
-      base-ref: ${{ github.base_ref }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34  # v5.3.0
+        with:
+          go-version-file: "go.mod"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          install-mode: "goinstall" #This is a temporary workaround to unblock the CI. Should be removed after workflow is fixed
+          version: v2.12.2
+          args: --new-from-merge-base=origin/${{ inputs['base-ref'] || github.base_ref }} --timeout=10m
