@@ -55,6 +55,9 @@ All components are installed to the current kubectl context
 This can safely be ran multiple times, and should be ran anytime a change is
 made to Results components.
 
+Accepts an optional mode argument: `./01-install.sh` (standard, default) or
+`./01-install.sh ha` (horizontal scaling configuration, see below).
+
 | Environment variable   | Description                                                                   | Default                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | KO_DOCKER_REPO         | Docker repository to use for ko                                               | kind.local                                                                  |
@@ -71,3 +74,145 @@ Once you have configured your local client, you can run the tests by running:
 ```sh
 $ go test --tags=e2e .
 ```
+
+### HA E2E Tests
+
+The E2E test suite verifies the three correctness guarantees using a real Kubernetes cluster with the HA configuration deployed.
+
+**Test file:** `test/e2e/e2e_ha_test.go`
+**Prerequisites:**
+1. HA configuration deployed via `test/e2e/01-install.sh ha`
+2. Tekton Pipelines installed
+3. Service account tokens extracted for API authentication
+
+**Run tests:**
+
+```bash
+cd test/e2e
+./01-install.sh ha
+go test -v --tags=e2e,e2e_ha -run TestHorizontalScaling .
+```
+
+### Test Structure
+
+**TestHorizontalScaling** contains four subtests:
+
+**1. VerifyPods** (precondition)
+
+Polls pod status and asserts:
+- 3 API pods are Ready
+- 3 watcher pods are Ready
+- 1 Postgres pod is Ready
+
+Fails fast if the deployment is unhealthy.
+
+**2. NoDuplicates**
+
+Creates 9 TaskRuns and waits for Result/Record annotations.
+
+**API-side check:**
+
+For each TaskRun's Result, calls ListRecords and counts TaskRun-type records (filters by `Data.Type` to exclude log/event records). Asserts exactly 1 TaskRun record per Result.
+
+**Watcher-side check:**
+
+Reads logs from all watcher pods via Kubernetes Logs API. Searches for log entries containing `"knative.dev/key":"default/<taskrun-name>"`. Asserts each TaskRun appears in exactly one watcher's logs, 
+proving bucket sharding worked.
+
+**3. NoLostRequests**
+
+**Count invariant:**
+
+Lists all records via `ListRecords(parent: "default/results/-")` with pagination. Counts records matching TaskRuns from the test. Asserts exactly 9 records found.
+
+**Individual retrieval:**
+
+For each TaskRun, calls GetRecord using the record name from the annotation. Asserts every call succeeds, proving records are persisted and retrievable.
+
+**Data integrity:**
+
+For each Record, unmarshals the `data` field to a TaskRun and verifies the `Name` field matches the expected TaskRun name. Catches corruption during concurrent writes.
+
+**4. APIDistribution**
+
+Reads logs from all API pods via Kubernetes Logs API. Counts log lines containing `"grpc.method"` per pod. Asserts at least 2 of 3 API pods received gRPC requests.
+  
+Prints per-pod request counts for debugging:
+
+```
+API pod tekton-results-api-abc123: 15 requests
+API pod tekton-results-api-def456: 12 requests
+API pod tekton-results-api-ghi789: 14 requests
+```
+
+### Postgres DB layer tests
+
+The `db/` sub-package contains end-to-end tests that exercise
+Postgres-specific behavior (error code mapping, schema validation, lister
+filter/sort/pagination, jsonb). These run against the deployed API server and
+its live Postgres instance — **not** an in-process server.
+
+See [`db/README.md`](db/README.md) for details on environment variables,
+standalone runs, and how to add tests for future stories.
+
+```sh
+$ go test -v -count=1 -tags=e2e ./test/e2e/db/...
+```
+
+The `e2e.sh` script runs these automatically after the main e2e suite; it
+handles port-forwarding and credential wiring via `DB_URL`.
+
+### Blob log plugin tests
+
+The blob log tests exercise the **supported** log retrieval path: the v1alpha3
+log plugin backed by blob storage (S3 via in-cluster MinIO, GCS via
+fake-gcs-server). Test data is seeded directly into the blob store (Vector's
+`kubernetes_logs` source is unreliable in kind CI); the plugin HTTP route
+reads it back — the API server never stores logs itself.
+
+**Test files:**
+- `test/e2e/logs_blob_test.go` (build tag: `e2e,blobs`) — S3 variant (MinIO)
+- `test/e2e/logs_gcs_blob_test.go` (build tag: `e2e,gcs_blob`) — GCS variant (fake-gcs-server)
+- `test/e2e/blob_helpers_test.go` (build tag: `e2e,(blobs||gcs_blob)`) — shared helpers
+
+**What is tested:**
+
+| Test | Tags | Description |
+|---|---|---|
+| `TestBlobLog_HappyPath` | `e2e,blobs` | Two step objects seeded into MinIO → retrieve via plugin → assert content + per-container identity |
+| `TestBlobLog_PipelineRun` | `e2e,blobs` | Two records seeded directly into MinIO → per-record log retrieval → cross-record isolation (no marker leak) |
+| `TestBlobLog_NoLogs` | `e2e,blobs` | Record with no logs → verify HTTP 200 with empty body (no crash, no phantom data) |
+| `TestBlobLog_Unauthorized` | `e2e,blobs` | Unauthenticated request (no token) → 401/403 |
+| `TestBlobLog_RBACDenied` | `e2e,blobs` | Authenticated token without `logs/get` permission → 401/403 |
+| `TestBlobLog_LargeLog` | `e2e,blobs` | ~4.5MB data seeded directly into MinIO → assert completeness (no truncation) + API pod memory logged |
+| `TestGCSBlobLog_HappyPath` | `e2e,gcs_blob` | Pre-seeded data in fake-gcs-server → read via `gs://` URL (validates `gcsblob` driver) |
+
+**Run manually (after cluster is up):**
+
+```sh
+# S3 variant (exclude /db and /client sub-packages)
+$ ./test/e2e/02-logs-setup.sh
+$ go test -v -count=1 -tags=e2e,blobs -timeout 10m -run TestBlobLog ./test/e2e/
+
+# GCS variant
+$ ./test/e2e/02-logs-setup-gcs.sh
+$ go test -v -count=1 -tags=e2e,gcs_blob -timeout 10m -run TestGCSBlobLog ./test/e2e/
+```
+
+The `e2e.sh` script runs both variants automatically after the DB tests and
+before the legacy GCS tests.
+
+### Legacy GCS log tests (deprecated path)
+
+The `TestGCSLog` test in `e2e_gcs_test.go` covers the deprecated v1alpha2
+streaming-storage path where the watcher uploads logs into GCS. This test
+uses `gcs-emulator.yaml` (in-cluster `fake-gcs-server`). It will be removed
+when the legacy path is deleted. **Do not extend this test.**
+
+### Log backend test matrix
+
+| Backend | Path | Driver | Test file | Build tags | Status |
+|---|---|---|---|---|---|
+| MinIO (S3) | Plugin (v1alpha3) | `s3blob` | `logs_blob_test.go` | `e2e,blobs` | Active |
+| GCS emulator | Plugin (v1alpha3) | `gcsblob` | `logs_gcs_blob_test.go` | `e2e,gcs_blob` | Active |
+| GCS emulator | Legacy (v1alpha2) | `gcs.go` | `e2e_gcs_test.go` | `e2e,gcs` | Deprecated |
